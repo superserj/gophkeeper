@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package gophkeeper.v1;
+
+option go_package = "github.com/superserj/gophkeeper/proto/gophkeeper/v1;gophkeeperv1";
+
+// AuthService заводит пользователей и выдаёт токены доступа.
+//
+// Мастер-пароль на сервер не передаётся: клиент присылает auth_key, выведенный
+// из мастер-пароля по salt_auth, а ключ шифрования данных не покидает клиента.
+service AuthService {
+  rpc Register (RegisterRequest) returns (AuthResponse);
+  rpc GetSalts (GetSaltsRequest) returns (GetSaltsResponse);
+  rpc Login (LoginRequest) returns (AuthResponse);
+}
+
+// VaultService хранит шифротексты пользователя и раздаёт их изменения.
+service VaultService {
+  rpc Push (PushRequest) returns (PushResponse);
+  rpc Pull (PullRequest) returns (stream SecretChange);
+  rpc Upload (stream UploadChunk) returns (PushResponse);
+  rpc Download (DownloadRequest) returns (stream DownloadChunk);
+}
+
+message RegisterRequest {
+  string login = 1;
+  bytes auth_key = 2;
+  bytes salt_auth = 3;
+  bytes salt_data = 4;
+  uint32 kdf_version = 5;
+  bytes verifier = 6;
+}
+
+message LoginRequest {
+  string login = 1;
+  bytes auth_key = 2;
+}
+
+message GetSaltsRequest {
+  string login = 1;
+}
+
+message GetSaltsResponse {
+  bytes salt_auth = 1;
+  uint32 kdf_version = 2;
+}
+
+message AuthResponse {
+  string token = 1;
+  bytes salt_auth = 2;
+  bytes salt_data = 3;
+  uint32 kdf_version = 4;
+  bytes verifier = 5;
+}
+
+message PushRequest {
+  string id = 1;
+  bytes payload = 2;
+  bool deleted = 3;
+  int64 base_revision = 4;
+}
+
+message PushResponse {
+  int64 revision = 1;
+}
+
+message PullRequest {
+  int64 since = 1;
+}
+
+message SecretChange {
+  string id = 1;
+  bytes payload = 2;
+  bool deleted = 3;
+  int64 revision = 4;
+  int64 updated_at_unix_ms = 5;
+}
+
+// UploadChunk несёт идентификаторы только в первом сообщении потока,
+// в остальных заполнено лишь поле data.
+message UploadChunk {
+  string id = 1;
+  int64 base_revision = 2;
+  bytes data = 3;
+}
+
+message DownloadRequest {
+  string id = 1;
+}
+
+message DownloadChunk {
+  bytes data = 1;
+  int64 revision = 2;
+}
+
+// Conflict уходит в деталях ошибки FAILED_PRECONDITION: клиент показывает
+// пользователю обе версии записи и просит выбрать, какую оставить.
+message Conflict {
+  SecretChange current = 1;
+}

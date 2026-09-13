@@ -1,0 +1,8 @@
+/bin/
+*.test
+*.out
+coverage.out
+*.db
+*.pem
+*.key
+*.crt
