@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,8 +37,14 @@ type options struct {
 	storePath string
 }
 
-// Execute разбирает аргументы и выполняет команду.
+// Execute выполняет команду, разобрав аргументы командной строки.
 func Execute(ctx context.Context, buildVersion, buildDate string) error {
+	return Run(ctx, os.Args[1:], os.Stdout, buildVersion, buildDate)
+}
+
+// Run выполняет команду с заданными аргументами и выводом. Отдельная функция
+// нужна тестам: они гоняют команды без подмены глобального состояния процесса.
+func Run(ctx context.Context, args []string, out io.Writer, buildVersion, buildDate string) error {
 	opts := &options{}
 
 	root := &cobra.Command{
@@ -49,6 +56,10 @@ func Execute(ctx context.Context, buildVersion, buildDate string) error {
 	root.PersistentFlags().StringVarP(&opts.address, "address", "a", defaultAddress, "server address")
 	root.PersistentFlags().StringVar(&opts.caCert, "cacert", "", "path to the server CA certificate")
 	root.PersistentFlags().StringVar(&opts.storePath, "store", defaultStorePath(), "path to the local store")
+
+	root.SetArgs(args)
+	root.SetOut(out)
+	root.SetErr(out)
 
 	root.AddCommand(
 		versionCmd(buildVersion, buildDate),

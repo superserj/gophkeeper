@@ -20,6 +20,18 @@ import (
 // а не одним сообщением.
 const UploadThreshold = 1 << 20
 
+// Server — сервер GophKeeper, каким его видит клиент. Интерфейс позволяет
+// проверять сценарии синхронизации без поднятого сервера.
+type Server interface {
+	Register(ctx context.Context, p remote.RegisterParams) (remote.Session, error)
+	Salts(ctx context.Context, login string) ([]byte, uint32, error)
+	Login(ctx context.Context, login string, authKey []byte) (remote.Session, error)
+	SetToken(token string)
+	Push(ctx context.Context, rec model.SecretRecord, baseRevision int64) (int64, error)
+	Pull(ctx context.Context, since int64, fn func(model.SecretRecord) error) error
+	Upload(ctx context.Context, id string, payload []byte, baseRevision int64) (int64, error)
+}
+
 // Ошибки сценариев.
 var (
 	// ErrNotFound возвращается, когда записи нет в локальном хранилище.
@@ -34,7 +46,7 @@ var (
 // на диск он не попадает ни в каком виде.
 type Vault struct {
 	store   *localstore.Store
-	client  *remote.Client
+	client  Server
 	login   string
 	dataKey []byte
 }
@@ -65,7 +77,7 @@ type SyncResult struct {
 
 // Register заводит пользователя: клиент генерирует соли, выводит ключи и
 // отправляет серверу только производные значения.
-func Register(ctx context.Context, client *remote.Client, store *localstore.Store, login, master string) (*Vault, error) {
+func Register(ctx context.Context, client Server, store *localstore.Store, login, master string) (*Vault, error) {
 	saltAuth, err := crypto.NewSalt()
 	if err != nil {
 		return nil, err
@@ -97,7 +109,7 @@ func Register(ctx context.Context, client *remote.Client, store *localstore.Stor
 }
 
 // Login входит на сервер и сохраняет профиль локально.
-func Login(ctx context.Context, client *remote.Client, store *localstore.Store, login, master string) (*Vault, error) {
+func Login(ctx context.Context, client Server, store *localstore.Store, login, master string) (*Vault, error) {
 	saltAuth, _, err := client.Salts(ctx, login)
 	if err != nil {
 		return nil, err
@@ -114,7 +126,7 @@ func Login(ctx context.Context, client *remote.Client, store *localstore.Store, 
 //
 // Соли и верификатор лежат рядом с данными, поэтому офлайн доступен весь
 // последний синхронизированный снимок.
-func Unlock(client *remote.Client, store *localstore.Store, master string) (*Vault, error) {
+func Unlock(client Server, store *localstore.Store, master string) (*Vault, error) {
 	profile, err := store.Profile()
 	if errors.Is(err, localstore.ErrNoProfile) {
 		return nil, ErrNotLoggedIn
@@ -138,7 +150,7 @@ func Unlock(client *remote.Client, store *localstore.Store, master string) (*Vau
 	return &Vault{store: store, client: client, login: profile.Login, dataKey: dataKey}, nil
 }
 
-func saveSession(client *remote.Client, store *localstore.Store, login, master string, session remote.Session) (*Vault, error) {
+func saveSession(client Server, store *localstore.Store, login, master string, session remote.Session) (*Vault, error) {
 	dataKey := crypto.DeriveDataKey(master, session.SaltData)
 	if err := crypto.CheckVerifier(dataKey, login, session.Verifier); err != nil {
 		return nil, err

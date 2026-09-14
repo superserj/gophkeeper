@@ -91,23 +91,24 @@ func Dial(address, caFile string) (*Client, error) {
 		tlsConfig.RootCAs = pool
 	}
 
-	holder := &tokenHolder{}
-	opts := append(transport.DialOptions(),
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		grpc.WithUnaryInterceptor(holder.unaryInterceptor),
-		grpc.WithStreamInterceptor(holder.streamInterceptor),
-	)
+	opts := append(transport.DialOptions(), grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 
 	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to server: %w", err)
 	}
+	return Wrap(conn), nil
+}
+
+// Wrap оборачивает готовое соединение. Нужен там, где соединение создаётся
+// отдельно, например поверх bufconn в тестах.
+func Wrap(conn *grpc.ClientConn) *Client {
 	return &Client{
 		conn:  conn,
 		auth:  pb.NewAuthServiceClient(conn),
 		vault: pb.NewVaultServiceClient(conn),
-		token: holder,
-	}, nil
+		token: &tokenHolder{},
+	}
 }
 
 // Close закрывает соединение.
@@ -122,7 +123,7 @@ func (c *Client) SetToken(token string) {
 
 // Register заводит пользователя на сервере.
 func (c *Client) Register(ctx context.Context, p RegisterParams) (Session, error) {
-	resp, err := c.auth.Register(ctx, &pb.RegisterRequest{
+	resp, err := c.auth.Register(c.token.withToken(ctx), &pb.RegisterRequest{
 		Login:      p.Login,
 		AuthKey:    p.AuthKey,
 		SaltAuth:   p.SaltAuth,
@@ -138,7 +139,7 @@ func (c *Client) Register(ctx context.Context, p RegisterParams) (Session, error
 
 // Salts запрашивает соль аутентификации до входа.
 func (c *Client) Salts(ctx context.Context, login string) ([]byte, uint32, error) {
-	resp, err := c.auth.GetSalts(ctx, &pb.GetSaltsRequest{Login: login})
+	resp, err := c.auth.GetSalts(c.token.withToken(ctx), &pb.GetSaltsRequest{Login: login})
 	if err != nil {
 		return nil, 0, convertError(err)
 	}
@@ -147,7 +148,7 @@ func (c *Client) Salts(ctx context.Context, login string) ([]byte, uint32, error
 
 // Login входит по логину и ключу аутентификации.
 func (c *Client) Login(ctx context.Context, login string, authKey []byte) (Session, error) {
-	resp, err := c.auth.Login(ctx, &pb.LoginRequest{Login: login, AuthKey: authKey})
+	resp, err := c.auth.Login(c.token.withToken(ctx), &pb.LoginRequest{Login: login, AuthKey: authKey})
 	if err != nil {
 		return Session{}, convertError(err)
 	}
@@ -156,7 +157,7 @@ func (c *Client) Login(ctx context.Context, login string, authKey []byte) (Sessi
 
 // Push отправляет запись поверх известной клиенту ревизии.
 func (c *Client) Push(ctx context.Context, rec model.SecretRecord, baseRevision int64) (int64, error) {
-	resp, err := c.vault.Push(ctx, &pb.PushRequest{
+	resp, err := c.vault.Push(c.token.withToken(ctx), &pb.PushRequest{
 		Id:           rec.ID,
 		Payload:      rec.Payload,
 		Deleted:      rec.Deleted,
@@ -170,7 +171,7 @@ func (c *Client) Push(ctx context.Context, rec model.SecretRecord, baseRevision 
 
 // Pull передаёт в fn изменения с ревизией больше since по возрастанию.
 func (c *Client) Pull(ctx context.Context, since int64, fn func(model.SecretRecord) error) error {
-	stream, err := c.vault.Pull(ctx, &pb.PullRequest{Since: since})
+	stream, err := c.vault.Pull(c.token.withToken(ctx), &pb.PullRequest{Since: since})
 	if err != nil {
 		return convertError(err)
 	}
@@ -197,7 +198,7 @@ func (c *Client) Pull(ctx context.Context, since int64, fn func(model.SecretReco
 
 // Upload отправляет запись кусками.
 func (c *Client) Upload(ctx context.Context, id string, payload []byte, baseRevision int64) (int64, error) {
-	stream, err := c.vault.Upload(ctx)
+	stream, err := c.vault.Upload(c.token.withToken(ctx))
 	if err != nil {
 		return 0, convertError(err)
 	}
@@ -226,7 +227,7 @@ func (c *Client) Upload(ctx context.Context, id string, payload []byte, baseRevi
 
 // Download забирает запись кусками.
 func (c *Client) Download(ctx context.Context, id string) ([]byte, int64, error) {
-	stream, err := c.vault.Download(ctx, &pb.DownloadRequest{Id: id})
+	stream, err := c.vault.Download(c.token.withToken(ctx), &pb.DownloadRequest{Id: id})
 	if err != nil {
 		return nil, 0, convertError(err)
 	}
@@ -299,16 +300,7 @@ func conflictFromStatus(st *status.Status) error {
 	return conflict
 }
 
-func (t *tokenHolder) unaryInterceptor(ctx context.Context, method string, req, reply any,
-	cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-	return invoker(t.withToken(ctx), method, req, reply, cc, opts...)
-}
-
-func (t *tokenHolder) streamInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn,
-	method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return streamer(t.withToken(ctx), desc, cc, method, opts...)
-}
-
+// withToken подставляет токен доступа в исходящие метаданные.
 func (t *tokenHolder) withToken(ctx context.Context) context.Context {
 	if t.value == "" {
 		return ctx
