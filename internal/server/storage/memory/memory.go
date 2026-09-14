@@ -1,0 +1,140 @@
+// Package memory хранит пользователей и записи в памяти процесса.
+//
+// Реализация повторяет семантику PostgreSQL-хранилища, включая нумерацию ревизий
+// и обнаружение конфликтов, и используется в тестах, где поднимать базу избыточно.
+package memory
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/superserj/gophkeeper/internal/model"
+	"github.com/superserj/gophkeeper/internal/server/storage"
+)
+
+// Storage — потокобезопасное хранилище в памяти.
+type Storage struct {
+	mu       sync.RWMutex
+	nextID   int64
+	users    map[string]*userState
+	byUserID map[int64]*userState
+}
+
+type userState struct {
+	user     storage.User
+	revision int64
+	secrets  map[string]model.SecretRecord
+}
+
+// New создаёт пустое хранилище.
+func New() *Storage {
+	return &Storage{
+		users:    make(map[string]*userState),
+		byUserID: make(map[int64]*userState),
+	}
+}
+
+// CreateUser заводит пользователя.
+func (s *Storage) CreateUser(_ context.Context, u storage.User) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.users[u.Login]; ok {
+		return 0, storage.ErrLoginTaken
+	}
+
+	s.nextID++
+	u.ID = s.nextID
+	state := &userState{user: u, secrets: make(map[string]model.SecretRecord)}
+	s.users[u.Login] = state
+	s.byUserID[u.ID] = state
+	return u.ID, nil
+}
+
+// GetUserByLogin возвращает профиль пользователя.
+func (s *Storage) GetUserByLogin(_ context.Context, login string) (storage.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	state, ok := s.users[login]
+	if !ok {
+		return storage.User{}, storage.ErrUserNotFound
+	}
+	return state.user, nil
+}
+
+// GetSecret возвращает запись пользователя.
+func (s *Storage) GetSecret(_ context.Context, userID int64, id string) (model.SecretRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	state, ok := s.byUserID[userID]
+	if !ok {
+		return model.SecretRecord{}, storage.ErrUserNotFound
+	}
+	rec, ok := state.secrets[id]
+	if !ok {
+		return model.SecretRecord{}, storage.ErrSecretNotFound
+	}
+	return rec, nil
+}
+
+// EachSecretSince передаёт изменения пользователя по возрастанию ревизии.
+func (s *Storage) EachSecretSince(_ context.Context, userID, since int64, fn func(model.SecretRecord) error) error {
+	s.mu.RLock()
+	state, ok := s.byUserID[userID]
+	if !ok {
+		s.mu.RUnlock()
+		return storage.ErrUserNotFound
+	}
+
+	changes := make([]model.SecretRecord, 0, len(state.secrets))
+	for _, rec := range state.secrets {
+		if rec.Revision > since {
+			changes = append(changes, rec)
+		}
+	}
+	s.mu.RUnlock()
+
+	sortByRevision(changes)
+	for _, rec := range changes {
+		if err := fn(rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SaveSecret сохраняет запись поверх известной клиенту ревизии.
+func (s *Storage) SaveSecret(_ context.Context, userID int64, rec model.SecretRecord, baseRevision int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.byUserID[userID]
+	if !ok {
+		return 0, storage.ErrUserNotFound
+	}
+
+	current, exists := state.secrets[rec.ID]
+	switch {
+	case !exists && baseRevision != 0:
+		return 0, &storage.ConflictError{}
+	case exists && current.Revision != baseRevision:
+		return 0, &storage.ConflictError{Current: current}
+	}
+
+	state.revision++
+	rec.Revision = state.revision
+	rec.UpdatedAt = time.Now()
+	state.secrets[rec.ID] = rec
+	return rec.Revision, nil
+}
+
+func sortByRevision(records []model.SecretRecord) {
+	for i := 1; i < len(records); i++ {
+		for j := i; j > 0 && records[j-1].Revision > records[j].Revision; j-- {
+			records[j-1], records[j] = records[j], records[j-1]
+		}
+	}
+}
