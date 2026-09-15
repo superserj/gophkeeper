@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -22,6 +23,10 @@ import (
 	"github.com/superserj/gophkeeper/internal/transport"
 	pb "github.com/superserj/gophkeeper/proto/gophkeeper/v1"
 )
+
+// shutdownTimeout ограничивает ожидание завершения запросов при остановке:
+// незакрытый клиентом поток Upload иначе держал бы сервер бесконечно.
+const shutdownTimeout = 30 * time.Second
 
 func main() {
 	logger, err := zap.NewProduction()
@@ -88,7 +93,18 @@ func run(logger *zap.Logger) error {
 		return err
 	case <-ctx.Done():
 		logger.Info("shutting down")
-		server.GracefulStop()
+		stopped := make(chan struct{})
+		go func() {
+			server.GracefulStop()
+			close(stopped)
+		}()
+
+		select {
+		case <-stopped:
+		case <-time.After(shutdownTimeout):
+			logger.Warn("graceful shutdown timed out, stopping now")
+			server.Stop()
+		}
 		return nil
 	}
 }
