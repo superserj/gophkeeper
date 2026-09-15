@@ -197,6 +197,30 @@ func TestGetSecret(t *testing.T) {
 	}
 }
 
+func TestDeleteStoresTombstone(t *testing.T) {
+	ctx := context.Background()
+	store := newStorage(t)
+	userID := newUser(t, store, uniqueLogin(t))
+	id := newUUID(t)
+
+	revision, err := store.SaveSecret(ctx, userID, model.SecretRecord{ID: id, Payload: []byte("data")}, 0)
+	if err != nil {
+		t.Fatalf("SaveSecret: %v", err)
+	}
+	// У отметки об удалении нет полезной нагрузки — она не должна ломать запись.
+	if _, err := store.SaveSecret(ctx, userID, model.SecretRecord{ID: id, Deleted: true}, revision); err != nil {
+		t.Fatalf("удаление не сохранилось: %v", err)
+	}
+
+	rec, err := store.GetSecret(ctx, userID, id)
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	if !rec.Deleted || len(rec.Payload) != 0 {
+		t.Fatalf("после удаления прочитана запись %+v", rec)
+	}
+}
+
 func TestSecretsAreIsolatedBetweenUsers(t *testing.T) {
 	ctx := context.Background()
 	store := newStorage(t)

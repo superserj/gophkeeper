@@ -188,6 +188,12 @@ func (s *Storage) SaveSecret(ctx context.Context, userID int64, rec model.Secret
 		return 0, fmt.Errorf("bump revision: %w", err)
 	}
 
+	// Отметка об удалении не несёт полезной нагрузки, но колонка объявлена
+	// NOT NULL: nil превратился бы в SQL NULL и удаление не сохранилось бы.
+	if rec.Payload == nil {
+		rec.Payload = []byte{}
+	}
+
 	const upsert = `INSERT INTO secrets (user_id, id, revision, payload, deleted, updated_at)
 		VALUES ($1, $2, $3, $4, $5, now())
 		ON CONFLICT (user_id, id) DO UPDATE
