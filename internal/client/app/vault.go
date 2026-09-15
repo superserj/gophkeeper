@@ -2,6 +2,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -38,6 +39,8 @@ var (
 	ErrNotFound = errors.New("secret not found")
 	// ErrNotLoggedIn возвращается, когда в хранилище нет профиля пользователя.
 	ErrNotLoggedIn = errors.New("not logged in, run register or login first")
+	// ErrForeignStore возвращается при попытке войти в хранилище другого владельца.
+	ErrForeignStore = errors.New("local store belongs to another account, use --store with another path")
 )
 
 // Vault — открытое хранилище одного пользователя.
@@ -156,6 +159,21 @@ func saveSession(client Server, store *localstore.Store, login, master string, s
 		return nil, err
 	}
 
+	// Записи, очередь изменений и курсор принадлежат одному владельцу: если
+	// впустить в них другой аккаунт, его синхронизация отправит на сервер чужие
+	// шифротексты и собьёт курсор. Совпадения логина мало — одинаковые логины на
+	// разных серверах дают разные соли, и старые записи перестанут расшифровываться.
+	switch existing, err := store.Profile(); {
+	case errors.Is(err, localstore.ErrNoProfile):
+	case err != nil:
+		return nil, err
+	case existing.Login != login,
+		!bytes.Equal(existing.SaltData, session.SaltData),
+		!bytes.Equal(existing.SaltAuth, session.SaltAuth),
+		existing.KDFVersion != session.KDFVersion:
+		return nil, ErrForeignStore
+	}
+
 	err := store.SaveProfile(localstore.Profile{
 		Login:      login,
 		SaltAuth:   session.SaltAuth,
@@ -180,9 +198,6 @@ func (v *Vault) Add(secret *model.Secret) (string, error) {
 	payload, err := v.seal(id, secret)
 	if err != nil {
 		return "", err
-	}
-	if len(payload) > model.MaxSecretSize {
-		return "", fmt.Errorf("secret is larger than %d bytes", model.MaxSecretSize)
 	}
 
 	err = v.store.PutPending(localstore.PendingChange{
@@ -446,12 +461,22 @@ func (v *Vault) baseRevision(id string) (int64, error) {
 	return rec.Revision, nil
 }
 
+// seal шифрует запись и сразу отбраковывает слишком большую: иначе она осела бы
+// в очереди и каждая следующая синхронизация спотыкалась бы на ней.
 func (v *Vault) seal(id string, secret *model.Secret) ([]byte, error) {
 	plaintext, err := secret.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	return crypto.Seal(v.dataKey, []byte(id), plaintext)
+
+	payload, err := crypto.Seal(v.dataKey, []byte(id), plaintext)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > model.MaxSecretSize {
+		return nil, fmt.Errorf("encrypted secret is larger than %d bytes", model.MaxSecretSize)
+	}
+	return payload, nil
 }
 
 func (v *Vault) open(id string, payload []byte) (*model.Secret, error) {

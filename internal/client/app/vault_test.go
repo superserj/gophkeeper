@@ -413,6 +413,30 @@ func TestUnlockChecksMasterPassword(t *testing.T) {
 	}
 }
 
+func TestStoreBelongsToSingleAccount(t *testing.T) {
+	ctx := context.Background()
+	listener := startServer(t)
+	store := newStore(t)
+
+	if _, err := app.Register(ctx, newClient(t, listener), store, testLogin, testMaster); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := app.Register(ctx, newClient(t, listener), newStore(t), "other", testMaster); err != nil {
+		t.Fatalf("Register второго пользователя: %v", err)
+	}
+
+	// Вход другого владельца в чужое хранилище отправил бы его записи не тому аккаунту.
+	_, err := app.Login(ctx, newClient(t, listener), store, "other", testMaster)
+	if !errors.Is(err, app.ErrForeignStore) {
+		t.Fatalf("получено %v, ожидалась ErrForeignStore", err)
+	}
+
+	// Повторный вход того же владельца по-прежнему разрешён.
+	if _, err := app.Login(ctx, newClient(t, listener), store, testLogin, testMaster); err != nil {
+		t.Fatalf("повторный вход владельца: %v", err)
+	}
+}
+
 func TestUnlockWithoutProfile(t *testing.T) {
 	listener := startServer(t)
 
@@ -477,6 +501,34 @@ func TestAddRejectsInvalidSecret(t *testing.T) {
 	}
 	if _, err := vault.Add(&model.Secret{Kind: model.KindText, Name: "note"}); err == nil {
 		t.Fatal("принята запись без содержимого")
+	}
+}
+
+func TestSecretLargerThanLimitIsRejected(t *testing.T) {
+	ctx := context.Background()
+	listener := startServer(t)
+
+	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	id, err := vault.Add(&model.Secret{Kind: model.KindBinary, Name: "small", Binary: []byte{1, 2, 3}})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Слишком большая запись не должна оседать в очереди: иначе каждая следующая
+	// синхронизация спотыкалась бы на ней.
+	huge := &model.Secret{Kind: model.KindBinary, Name: "huge", Binary: make([]byte, model.MaxSecretSize)}
+	if _, err := vault.Add(huge); err == nil {
+		t.Fatal("Add принял запись больше лимита")
+	}
+	if err := vault.Update(id, huge); err == nil {
+		t.Fatal("Update принял запись больше лимита")
+	}
+
+	if _, err := vault.Sync(ctx); err != nil {
+		t.Fatalf("синхронизация после отказа: %v", err)
 	}
 }
 

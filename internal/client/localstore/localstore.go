@@ -99,6 +99,13 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 
+	// Права применяются только при создании файла, а в хранилище лежат токен и
+	// шифротексты: заранее созданный файл с правами 0644 отдал бы их всем.
+	if err := os.Chmod(path, filePerm); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("restrict store permissions: %w", err)
+	}
+
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{bucketServer, bucketPending, bucketMeta} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
