@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -30,22 +31,29 @@ const (
 // когда команду запускают без терминала.
 const masterPasswordEnv = "GOPHKEEPER_MASTER_PASSWORD"
 
-// options — общие флаги всех команд.
+// secretFilePerm — права на файлы с расшифрованными данными.
+const secretFilePerm = 0o600
+
+// options — общие флаги всех команд и общий буфер ввода.
 type options struct {
 	address   string
 	caCert    string
 	storePath string
+	input     *bufio.Reader
 }
 
 // Execute выполняет команду, разобрав аргументы командной строки.
 func Execute(ctx context.Context, buildVersion, buildDate string) error {
-	return Run(ctx, os.Args[1:], os.Stdout, buildVersion, buildDate)
+	return Run(ctx, os.Args[1:], os.Stdin, os.Stdout, buildVersion, buildDate)
 }
 
-// Run выполняет команду с заданными аргументами и выводом. Отдельная функция
-// нужна тестам: они гоняют команды без подмены глобального состояния процесса.
-func Run(ctx context.Context, args []string, out io.Writer, buildVersion, buildDate string) error {
-	opts := &options{}
+// Run выполняет команду с заданными аргументами, вводом и выводом. Отдельная
+// функция нужна тестам: они гоняют команды без подмены глобального состояния
+// процесса.
+func Run(ctx context.Context, args []string, in io.Reader, out io.Writer, buildVersion, buildDate string) error {
+	// Буфер чтения один на запуск: отдельный буфер на каждое значение забирал бы
+	// в себя следующие строки, и второе значение терялось бы.
+	opts := &options{input: bufio.NewReader(in)}
 
 	root := &cobra.Command{
 		Use:           "gophkeeper",
@@ -58,6 +66,7 @@ func Run(ctx context.Context, args []string, out io.Writer, buildVersion, buildD
 	root.PersistentFlags().StringVar(&opts.storePath, "store", defaultStorePath(), "path to the local store")
 
 	root.SetArgs(args)
+	root.SetIn(in)
 	root.SetOut(out)
 	root.SetErr(out)
 
@@ -160,12 +169,16 @@ func addCmd(opts *options) *cobra.Command {
 }
 
 func addCredentialsCmd(opts *options) *cobra.Command {
-	var name, meta, login, password string
+	var name, meta, login string
 
 	cmd := &cobra.Command{
 		Use:   "credentials",
 		Short: "add a login and password pair",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			password, err := readSecretValue(cmd, opts, "password: ")
+			if err != nil {
+				return err
+			}
 			return addSecret(cmd, opts, &model.Secret{
 				Kind:        model.KindCredentials,
 				Name:        name,
@@ -176,7 +189,6 @@ func addCredentialsCmd(opts *options) *cobra.Command {
 	}
 	bindNameMeta(cmd, &name, &meta)
 	cmd.Flags().StringVar(&login, "login", "", "stored login")
-	cmd.Flags().StringVar(&password, "password", "", "stored password")
 	return cmd
 }
 
@@ -234,12 +246,20 @@ func addBinaryCmd(opts *options) *cobra.Command {
 }
 
 func addCardCmd(opts *options) *cobra.Command {
-	var name, meta, number, holder, expires, cvv string
+	var name, meta, holder, expires string
 
 	cmd := &cobra.Command{
 		Use:   "card",
 		Short: "add bank card data",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			number, err := readSecretValue(cmd, opts, "card number: ")
+			if err != nil {
+				return err
+			}
+			cvv, err := readSecretValue(cmd, opts, "verification code: ")
+			if err != nil {
+				return err
+			}
 			return addSecret(cmd, opts, &model.Secret{
 				Kind: model.KindCard,
 				Name: name,
@@ -249,10 +269,8 @@ func addCardCmd(opts *options) *cobra.Command {
 		},
 	}
 	bindNameMeta(cmd, &name, &meta)
-	cmd.Flags().StringVar(&number, "number", "", "card number")
 	cmd.Flags().StringVar(&holder, "holder", "", "card holder")
 	cmd.Flags().StringVar(&expires, "expires", "", "expiration date")
-	cmd.Flags().StringVar(&cvv, "cvv", "", "verification code")
 	return cmd
 }
 
@@ -427,12 +445,63 @@ func printSecret(cmd *cobra.Command, secret *model.Secret, out string) error {
 			cmd.Printf("binary: %d bytes, use --out to save\n", len(secret.Binary))
 			return nil
 		}
-		if err := os.WriteFile(out, secret.Binary, 0o600); err != nil {
-			return fmt.Errorf("write file: %w", err)
+		if err := writeSecretFile(out, secret.Binary); err != nil {
+			return err
 		}
 		cmd.Printf("binary written to %s\n", out)
 	}
 	return nil
+}
+
+// writeSecretFile кладёт расшифрованные данные в новый файл с правами 0600 и
+// подменяет им целевой: запись поверх существующего файла сохранила бы его
+// прежние права, и секрет стал бы доступен другим пользователям системы.
+func writeSecretFile(path string, data []byte) error {
+	temp := path + ".tmp"
+	file, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, secretFilePerm)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temp)
+		return fmt.Errorf("write file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temp)
+		return fmt.Errorf("close file: %w", err)
+	}
+	if err := os.Rename(temp, path); err != nil {
+		_ = os.Remove(temp)
+		return fmt.Errorf("replace file: %w", err)
+	}
+	return nil
+}
+
+// readSecretValue спрашивает значение, которое нельзя передавать флагом:
+// аргументы командной строки видны в списке процессов и остаются в истории
+// оболочки.
+func readSecretValue(cmd *cobra.Command, opts *options, prompt string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		cmd.Print(prompt)
+		value, err := term.ReadPassword(fd)
+		cmd.Println()
+		if err != nil {
+			return "", fmt.Errorf("read value: %w", err)
+		}
+		return string(value), nil
+	}
+
+	line, err := opts.input.ReadString('\n')
+	if errors.Is(err, io.EOF) && line == "" {
+		return "", fmt.Errorf("value for %q is not provided", strings.TrimSuffix(prompt, ": "))
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("read value: %w", err)
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }
 
 func describe(secret *model.Secret) string {

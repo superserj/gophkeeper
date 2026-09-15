@@ -61,9 +61,16 @@ func prepareStore(t *testing.T) string {
 // run выполняет команду и возвращает её вывод.
 func run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	return runWithInput(t, "", args...)
+}
+
+// runWithInput выполняет команду, подав ей во ввод секретные значения:
+// пароль и реквизиты карты нельзя передавать флагами.
+func runWithInput(t *testing.T, input string, args ...string) (string, error) {
+	t.Helper()
 
 	var out bytes.Buffer
-	err := cli.Run(context.Background(), args, &out, "v1.0.0", "2026-09-17")
+	err := cli.Run(context.Background(), args, strings.NewReader(input), &out, "v1.0.0", "2026-09-17")
 	return out.String(), err
 }
 
@@ -82,7 +89,7 @@ func TestAddAndListSecrets(t *testing.T) {
 	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
 	store := prepareStore(t)
 
-	output, err := run(t, "--store", store, "add", "credentials", "--name", "bank", "--login", "u", "--password", "p")
+	output, err := runWithInput(t, "p\n", "--store", store, "add", "credentials", "--name", "bank", "--login", "u")
 	if err != nil {
 		t.Fatalf("add credentials: %v", err)
 	}
@@ -162,8 +169,8 @@ func TestAddCard(t *testing.T) {
 	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
 	store := prepareStore(t)
 
-	output, err := run(t, "--store", store, "add", "card",
-		"--name", "visa", "--number", "4111111111111111", "--holder", "IVAN IVANOV", "--expires", "12/29", "--cvv", "123")
+	output, err := runWithInput(t, "4111111111111111\n123\n", "--store", store, "add", "card",
+		"--name", "visa", "--holder", "IVAN IVANOV", "--expires", "12/29")
 	if err != nil {
 		t.Fatalf("add card: %v", err)
 	}
@@ -172,7 +179,9 @@ func TestAddCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if !strings.Contains(output, "4111111111111111") || !strings.Contains(output, "12/29") {
+	// Оба секретных значения читаются из одного потока: код проверки не должен
+	// потеряться после номера карты.
+	if !strings.Contains(output, "4111111111111111") || !strings.Contains(output, "cvv: 123") {
 		t.Fatalf("вывод карты: %q", output)
 	}
 }
@@ -205,6 +214,48 @@ func TestResolveRequiresID(t *testing.T) {
 
 	if _, err := run(t, "--store", store, "sync", "--resolve", "unknown", "--id", "x"); err == nil {
 		t.Fatal("принят неизвестный способ разрешения конфликта")
+	}
+}
+
+func TestSecretValueIsRequired(t *testing.T) {
+	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
+	store := prepareStore(t)
+
+	if _, err := runWithInput(t, "", "--store", store, "add", "credentials", "--name", "empty", "--login", "u"); err == nil {
+		t.Fatal("запись сохранена с пустым паролем")
+	}
+}
+
+func TestGetWritesBinaryWithOwnerOnlyPermissions(t *testing.T) {
+	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
+	store := prepareStore(t)
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "blob.bin")
+	if err := os.WriteFile(source, []byte{9, 8, 7}, 0o600); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+
+	output, err := run(t, "--store", store, "add", "binary", "--name", "blob", "--file", source)
+	if err != nil {
+		t.Fatalf("add binary: %v", err)
+	}
+
+	// Файл уже существует и открыт всем на чтение: экспорт не должен оставить его таким.
+	target := filepath.Join(dir, "restored.bin")
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if _, err := run(t, "--store", store, "get", strings.TrimSpace(output), "--out", target); err != nil {
+		t.Fatalf("get --out: %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("права файла %v, ожидались 0600", info.Mode().Perm())
 	}
 }
 
