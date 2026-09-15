@@ -6,10 +6,28 @@ import (
 	"errors"
 	"fmt"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/superserj/gophkeeper/internal/crypto"
 	"github.com/superserj/gophkeeper/internal/model"
 	"github.com/superserj/gophkeeper/internal/server/auth"
 	"github.com/superserj/gophkeeper/internal/server/storage"
+)
+
+// Ограничения на запросы, доступные без токена.
+const (
+	// MaxParallelKDF — сколько вычислений Argon2id идут одновременно: каждое
+	// занимает 64 МиБ памяти.
+	MaxParallelKDF = 4
+	// MaxPendingKDF — сколько запросов ждут своей очереди. Ожидающий запрос
+	// держит в памяти своё тело, поэтому очередь тоже ограничена: при перегрузке
+	// сервер честно отказывает вместо того, чтобы копить запросы до отказа памяти.
+	MaxPendingKDF = 32
+	// MaxLoginLength — предел длины логина.
+	MaxLoginLength = 64
+	// MaxVerifierSize — предел размера верификатора: он шифрует короткую
+	// контрольную строку, и больше этого значения там быть нечему.
+	MaxVerifierSize = 256
 )
 
 // Repository — доступ к хранилищу, нужный сервису.
@@ -33,6 +51,8 @@ var (
 	ErrPayloadTooLarge = errors.New("payload too large")
 	// ErrEmptyLogin возвращается на пустой логин.
 	ErrEmptyLogin = errors.New("login is empty")
+	// ErrBusy возвращается, когда очередь на вывод ключей переполнена.
+	ErrBusy = errors.New("server is busy")
 )
 
 // Credentials — данные, которые клиент присылает при регистрации.
@@ -65,13 +85,20 @@ type Salts struct {
 
 // Service реализует сценарии сервера поверх репозитория и менеджера токенов.
 type Service struct {
-	repo   Repository
-	tokens *auth.TokenManager
+	repo    Repository
+	tokens  *auth.TokenManager
+	kdf     *semaphore.Weighted
+	pending *semaphore.Weighted
 }
 
 // New создаёт сервис.
 func New(repo Repository, tokens *auth.TokenManager) *Service {
-	return &Service{repo: repo, tokens: tokens}
+	return &Service{
+		repo:    repo,
+		tokens:  tokens,
+		kdf:     semaphore.NewWeighted(MaxParallelKDF),
+		pending: semaphore.NewWeighted(MaxPendingKDF),
+	}
 }
 
 // Register заводит пользователя и сразу выдаёт токен.
@@ -79,14 +106,23 @@ func (s *Service) Register(ctx context.Context, c Credentials) (Session, error) 
 	if c.Login == "" {
 		return Session{}, ErrEmptyLogin
 	}
-	if len(c.AuthKey) == 0 || len(c.SaltAuth) != crypto.SaltSize || len(c.SaltData) != crypto.SaltSize {
+	if len(c.Login) > MaxLoginLength {
 		return Session{}, ErrBadCredentials
 	}
-	if len(c.Verifier) == 0 {
+	// Размеры фиксированы схемой: всё, что больше, — попытка занять память сервера.
+	if len(c.AuthKey) != crypto.KeySize || len(c.SaltAuth) != crypto.SaltSize || len(c.SaltData) != crypto.SaltSize {
+		return Session{}, ErrBadCredentials
+	}
+	if len(c.Verifier) == 0 || len(c.Verifier) > MaxVerifierSize {
 		return Session{}, ErrBadCredentials
 	}
 
+	release, err := s.acquireKDF(ctx)
+	if err != nil {
+		return Session{}, err
+	}
 	hash, err := auth.HashAuthKey(c.AuthKey)
+	release()
 	if err != nil {
 		return Session{}, fmt.Errorf("hash auth key: %w", err)
 	}
@@ -134,6 +170,10 @@ func (s *Service) Salts(ctx context.Context, login string) (Salts, error) {
 
 // Login проверяет ключ аутентификации и выдаёт токен.
 func (s *Service) Login(ctx context.Context, login string, authKey []byte) (Session, error) {
+	if login == "" || len(login) > MaxLoginLength || len(authKey) != crypto.KeySize {
+		return Session{}, ErrBadCredentials
+	}
+
 	user, err := s.repo.GetUserByLogin(ctx, login)
 	if errors.Is(err, storage.ErrUserNotFound) {
 		return Session{}, ErrBadCredentials
@@ -142,7 +182,13 @@ func (s *Service) Login(ctx context.Context, login string, authKey []byte) (Sess
 		return Session{}, err
 	}
 
-	if err := auth.VerifyAuthKey(user.PasswordHash, authKey); err != nil {
+	release, err := s.acquireKDF(ctx)
+	if err != nil {
+		return Session{}, err
+	}
+	err = auth.VerifyAuthKey(user.PasswordHash, authKey)
+	release()
+	if err != nil {
 		return Session{}, ErrBadCredentials
 	}
 
@@ -156,6 +202,22 @@ func (s *Service) Login(ctx context.Context, login string, authKey []byte) (Sess
 		SaltData:   user.SaltData,
 		KDFVersion: user.KDFVersion,
 		Verifier:   user.Verifier,
+	}, nil
+}
+
+// acquireKDF занимает место в очереди на вывод ключа и возвращает функцию,
+// освобождающую его.
+func (s *Service) acquireKDF(ctx context.Context) (func(), error) {
+	if !s.pending.TryAcquire(1) {
+		return nil, ErrBusy
+	}
+	if err := s.kdf.Acquire(ctx, 1); err != nil {
+		s.pending.Release(1)
+		return nil, fmt.Errorf("wait for key derivation slot: %w", err)
+	}
+	return func() {
+		s.kdf.Release(1)
+		s.pending.Release(1)
 	}, nil
 }
 

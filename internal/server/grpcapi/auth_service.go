@@ -75,6 +75,8 @@ func authError(err error) error {
 		return status.Error(codes.Unauthenticated, "invalid credentials")
 	case errors.Is(err, service.ErrEmptyLogin):
 		return status.Error(codes.InvalidArgument, "login is empty")
+	case errors.Is(err, service.ErrBusy):
+		return status.Error(codes.ResourceExhausted, "server is busy, try again later")
 	default:
 		return status.Error(codes.Internal, "internal error")
 	}

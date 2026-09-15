@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/superserj/gophkeeper/internal/crypto"
@@ -100,6 +101,23 @@ func TestRegisterValidatesInput(t *testing.T) {
 			want:  service.ErrEmptyLogin,
 		},
 		{
+			name: "long login",
+			creds: service.Credentials{
+				Login: strings.Repeat("a", service.MaxLoginLength+1), AuthKey: valid.AuthKey,
+				SaltAuth: valid.SaltAuth, SaltData: valid.SaltData, Verifier: valid.Verifier,
+			},
+			want: service.ErrBadCredentials,
+		},
+		{
+			name: "oversized verifier",
+			creds: service.Credentials{
+				Login: testLogin, AuthKey: valid.AuthKey,
+				SaltAuth: valid.SaltAuth, SaltData: valid.SaltData,
+				Verifier: make([]byte, service.MaxVerifierSize+1),
+			},
+			want: service.ErrBadCredentials,
+		},
+		{
 			name:  "no auth key",
 			creds: service.Credentials{Login: testLogin, SaltAuth: valid.SaltAuth, SaltData: valid.SaltData, Verifier: valid.Verifier},
 			want:  service.ErrBadCredentials,
@@ -141,8 +159,11 @@ func TestLoginRejectsWrongKey(t *testing.T) {
 	if _, err := svc.Login(ctx, testLogin, []byte("wrong")); !errors.Is(err, service.ErrBadCredentials) {
 		t.Fatalf("неверный ключ дал %v, ожидалась ErrBadCredentials", err)
 	}
-	if _, err := svc.Login(ctx, "absent", []byte("wrong")); !errors.Is(err, service.ErrBadCredentials) {
+	if _, err := svc.Login(ctx, "absent", crypto.DeriveAuthKey("x", make([]byte, crypto.SaltSize))); !errors.Is(err, service.ErrBadCredentials) {
 		t.Fatalf("неизвестный логин дал %v, ожидалась ErrBadCredentials", err)
+	}
+	if _, err := svc.Login(ctx, "", crypto.DeriveAuthKey("x", make([]byte, crypto.SaltSize))); !errors.Is(err, service.ErrBadCredentials) {
+		t.Fatalf("пустой логин дал %v, ожидалась ErrBadCredentials", err)
 	}
 }
 
