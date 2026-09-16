@@ -38,8 +38,12 @@ var ErrNoTLS = errors.New("tls certificate and key are not set")
 // ErrNoJWTSecret возвращается, когда не задан секрет подписи токенов.
 var ErrNoJWTSecret = errors.New("jwt secret is not set")
 
-// Parse читает конфигурацию: сначала файл, затем флаги, затем переменные
-// окружения — каждый следующий источник перекрывает предыдущий.
+// Parse читает конфигурацию: сначала файл, затем переменные окружения, затем
+// флаги — каждый следующий источник перекрывает предыдущий.
+//
+// Флаги приоритетнее окружения: флаг — это явное намерение того, кто запускает
+// процесс сейчас, а переменные приходят из среды (compose, systemd, CI) и должны
+// перекрываться без её правки.
 func Parse(args []string) (Config, error) {
 	fs := flag.NewFlagSet("gophkeeper-server", flag.ContinueOnError)
 
@@ -56,7 +60,7 @@ func Parse(args []string) (Config, error) {
 	}
 
 	path := *configPath
-	if env := os.Getenv("CONFIG"); env != "" {
+	if env, ok := os.LookupEnv("CONFIG"); ok {
 		path = env
 	}
 
@@ -70,6 +74,14 @@ func Parse(args []string) (Config, error) {
 	}
 
 	cfg = merge(cfg, Config{
+		Address:     env("GRPC_ADDRESS"),
+		DatabaseURI: env("DATABASE_URI"),
+		JWTSecret:   env("JWT_SECRET"),
+		CertFile:    env("TLS_CERT"),
+		KeyFile:     env("TLS_KEY"),
+	})
+
+	cfg = merge(cfg, Config{
 		Address:     *address,
 		DatabaseURI: *databaseURI,
 		JWTSecret:   *jwtSecret,
@@ -77,15 +89,18 @@ func Parse(args []string) (Config, error) {
 		KeyFile:     *keyFile,
 	})
 
-	cfg = merge(cfg, Config{
-		Address:     os.Getenv("GRPC_ADDRESS"),
-		DatabaseURI: os.Getenv("DATABASE_URI"),
-		JWTSecret:   os.Getenv("JWT_SECRET"),
-		CertFile:    os.Getenv("TLS_CERT"),
-		KeyFile:     os.Getenv("TLS_KEY"),
-	})
-
 	return cfg, cfg.validate()
+}
+
+// env читает переменную окружения. LookupEnv отличает пустое значение от
+// незаданного: объявленная пустой переменная означает «значения нет», и
+// подставлять вместо неё дефолт было бы неверно.
+func env(name string) string {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return ""
+	}
+	return value
 }
 
 func (c Config) validate() error {

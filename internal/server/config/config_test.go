@@ -33,19 +33,45 @@ func TestParseUsesDefaultAddress(t *testing.T) {
 	}
 }
 
-func TestEnvOverridesFlags(t *testing.T) {
+func TestFlagsOverrideEnv(t *testing.T) {
 	t.Setenv("GRPC_ADDRESS", ":5000")
 	t.Setenv("DATABASE_URI", "postgres://env/keeper")
 	t.Setenv("JWT_SECRET", "env-secret")
 	t.Setenv("TLS_CERT", "env-cert.pem")
 	t.Setenv("TLS_KEY", "env-key.pem")
 
-	cfg, err := Parse([]string{"-a", ":4000", "-d", "postgres://flag/keeper", "-k", "flag", "-cert", "c", "-key", "k"})
+	cfg, err := Parse([]string{"-a", ":4000", "-d", "postgres://flag/keeper", "-k", "flag-secret"})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if cfg.Address != ":5000" || cfg.DatabaseURI != "postgres://env/keeper" || cfg.JWTSecret != "env-secret" {
-		t.Fatalf("окружение не перекрыло флаги: %+v", cfg)
+	if cfg.Address != ":4000" || cfg.DatabaseURI != "postgres://flag/keeper" || cfg.JWTSecret != "flag-secret" {
+		t.Fatalf("флаги не перекрыли окружение: %+v", cfg)
+	}
+	// То, что флагом не задано, берётся из окружения.
+	if cfg.CertFile != "env-cert.pem" || cfg.KeyFile != "env-key.pem" {
+		t.Fatalf("значения из окружения потеряны: %+v", cfg)
+	}
+}
+
+func TestEnvOverridesFile(t *testing.T) {
+	path := writeConfig(t, `{
+		"grpc_address": ":7000",
+		"database_uri": "postgres://file/keeper",
+		"jwt_secret": "file-secret",
+		"cert_file": "file-cert.pem",
+		"key_file": "file-key.pem"
+	}`)
+	t.Setenv("DATABASE_URI", "postgres://env/keeper")
+
+	cfg, err := Parse([]string{"-c", path})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.DatabaseURI != "postgres://env/keeper" {
+		t.Fatalf("окружение не перекрыло файл: %+v", cfg)
+	}
+	if cfg.Address != ":7000" {
+		t.Fatalf("значение из файла потеряно: %+v", cfg)
 	}
 }
 
