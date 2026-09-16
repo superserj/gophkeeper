@@ -87,10 +87,26 @@ func TestValidateReportsEmptyName(t *testing.T) {
 
 func TestValidateRejectsBrokenEncoding(t *testing.T) {
 	// «Привет» в Windows-1251: JSON заменил бы эти байты символом замены,
-	// и восстановить исходный текст стало бы нельзя.
-	secret := Secret{Kind: KindText, Name: "note", Text: string([]byte{0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2})}
-	if err := secret.Validate(); !errors.Is(err, ErrNotUTF8) {
-		t.Fatalf("получено %v, ожидалась ErrNotUTF8", err)
+	// и восстановить исходное значение стало бы нельзя. Проверяется каждое
+	// строковое поле, а не только текст заметки.
+	broken := string([]byte{0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2})
+
+	tests := map[string]Secret{
+		"text":     {Kind: KindText, Name: "note", Text: broken},
+		"name":     {Kind: KindText, Name: broken, Text: "заметка"},
+		"meta":     {Kind: KindText, Name: "note", Meta: broken, Text: "заметка"},
+		"password": {Kind: KindCredentials, Name: "bank", Credentials: &Credentials{Login: "user", Password: broken}},
+		"login":    {Kind: KindCredentials, Name: "bank", Credentials: &Credentials{Login: broken, Password: "pass"}},
+		"holder":   {Kind: KindCard, Name: "visa", Card: &Card{Number: "4111111111111111", Holder: broken}},
+		"binary":   {Kind: KindBinary, Name: broken, Binary: []byte{1}},
+	}
+
+	for name, secret := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := secret.Validate(); !errors.Is(err, ErrNotUTF8) {
+				t.Fatalf("получено %v, ожидалась ErrNotUTF8", err)
+			}
+		})
 	}
 }
 

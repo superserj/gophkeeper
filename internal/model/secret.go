@@ -36,12 +36,13 @@ const MaxSecretSize = 10 << 20
 // не найдёт её в списке.
 var ErrEmptyName = errors.New("secret name is empty")
 
-// ErrNotUTF8 возвращается для текста, который не является корректным UTF-8.
+// ErrNotUTF8 возвращается для строки, которая не является корректным UTF-8.
 //
-// Отказ здесь намеренный: JSON заменил бы такие байты символом замены, и файл
-// в другой кодировке сохранился бы молча испорченным, без возможности вернуть
-// исходный текст. Для произвольных байтов есть тип KindBinary.
-var ErrNotUTF8 = errors.New("text is not valid UTF-8, store it as binary data")
+// Отказ здесь намеренный и касается всех строковых полей: JSON заменил бы такие
+// байты символом замены, и значение из другой кодировки — заметка, пароль или
+// номер карты — сохранилось бы молча испорченным, без возможности его вернуть.
+// Для произвольных байтов есть тип KindBinary.
+var ErrNotUTF8 = errors.New("value is not valid UTF-8, store it as binary data")
 
 // Credentials — пара логин/пароль.
 type Credentials struct {
@@ -83,6 +84,7 @@ func (s *Secret) Validate() error {
 	if s.Name == "" {
 		return ErrEmptyName
 	}
+
 	switch s.Kind {
 	case KindCredentials:
 		if s.Credentials == nil || s.Credentials.Login == "" {
@@ -91,9 +93,6 @@ func (s *Secret) Validate() error {
 	case KindText:
 		if s.Text == "" {
 			return errors.New("text is empty")
-		}
-		if !utf8.ValidString(s.Text) {
-			return ErrNotUTF8
 		}
 	case KindBinary:
 		if len(s.Binary) == 0 {
@@ -105,6 +104,24 @@ func (s *Secret) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unknown secret kind %q", s.Kind)
+	}
+	return s.validateEncoding()
+}
+
+// validateEncoding проверяет кодировку всех строковых полей записи.
+func (s *Secret) validateEncoding() error {
+	values := []string{s.Name, s.Meta, s.Text}
+	if s.Credentials != nil {
+		values = append(values, s.Credentials.Login, s.Credentials.Password)
+	}
+	if s.Card != nil {
+		values = append(values, s.Card.Number, s.Card.Holder, s.Card.Expires, s.Card.CVV)
+	}
+
+	for _, value := range values {
+		if !utf8.ValidString(value) {
+			return ErrNotUTF8
+		}
 	}
 	return nil
 }
