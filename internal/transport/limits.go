@@ -19,12 +19,13 @@ func ServerOptions() []grpc.ServerOption {
 	}
 }
 
-// DialOptions возвращает лимиты сообщений для grpc.NewClient.
+// DialOptions возвращает лимиты сообщений и политику повторов для grpc.NewClient.
 func DialOptions() []grpc.DialOption {
 	return []grpc.DialOption{
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxMessageSize),
 			grpc.MaxCallSendMsgSize(MaxMessageSize),
 		),
+		grpc.WithDefaultServiceConfig(serviceConfig()),
 	}
 }
