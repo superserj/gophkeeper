@@ -114,6 +114,30 @@ func TestConfigPathFromEnv(t *testing.T) {
 	}
 }
 
+func TestConfigFlagOverridesConfigEnv(t *testing.T) {
+	fromEnv := writeConfig(t, `{
+		"database_uri": "postgres://env-file/keeper",
+		"jwt_secret": "env-file-secret",
+		"cert_file": "cert.pem",
+		"key_file": "key.pem"
+	}`)
+	fromFlag := writeConfig(t, `{
+		"database_uri": "postgres://flag-file/keeper",
+		"jwt_secret": "flag-file-secret",
+		"cert_file": "cert.pem",
+		"key_file": "key.pem"
+	}`)
+	t.Setenv("CONFIG", fromEnv)
+
+	cfg, err := Parse([]string{"-c", fromFlag})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.DatabaseURI != "postgres://flag-file/keeper" {
+		t.Fatalf("прочитан файл из окружения, а не из флага: %+v", cfg)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	tests := []struct {
 		name string

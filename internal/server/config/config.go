@@ -59,9 +59,11 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 
+	// Путь к файлу подчиняется тому же правилу, что и остальные настройки:
+	// явный флаг сильнее переменной окружения.
 	path := *configPath
-	if env, ok := os.LookupEnv("CONFIG"); ok {
-		path = env
+	if path == "" {
+		path = env("CONFIG")
 	}
 
 	cfg := Config{Address: defaultAddress}
