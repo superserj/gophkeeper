@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,12 +32,18 @@ type VaultService struct {
 	pb.UnimplementedVaultServiceServer
 
 	svc     *service.Service
+	logger  *zap.Logger
 	uploads *semaphore.Weighted
 }
 
-// NewVaultService создаёт gRPC-обёртку над сервисом.
-func NewVaultService(svc *service.Service) *VaultService {
-	return &VaultService{svc: svc, uploads: semaphore.NewWeighted(maxParallelUploads)}
+// NewVaultService создаёт gRPC-обёртку над сервисом. Логгер передаётся явно,
+// как и в AuthService.
+func NewVaultService(svc *service.Service, logger *zap.Logger) *VaultService {
+	return &VaultService{
+		svc:     svc,
+		logger:  named(logger, "vault"),
+		uploads: semaphore.NewWeighted(maxParallelUploads),
+	}
 }
 
 // Push сохраняет запись поверх известной клиенту ревизии.
@@ -52,7 +59,7 @@ func (s *VaultService) Push(ctx context.Context, req *pb.PushRequest) (*pb.PushR
 		Deleted: req.GetDeleted(),
 	}, req.GetBaseRevision())
 	if err != nil {
-		return nil, vaultError(err)
+		return nil, s.fail("push", err)
 	}
 	return &pb.PushResponse{Revision: revision}, nil
 }
@@ -74,7 +81,7 @@ func (s *VaultService) Pull(req *pb.PullRequest, stream pb.VaultService_PullServ
 		})
 	})
 	if err != nil {
-		return vaultError(err)
+		return s.fail("pull", err)
 	}
 	return nil
 }
@@ -129,7 +136,7 @@ func (s *VaultService) Upload(stream pb.VaultService_UploadServer) error {
 
 	revision, err := s.svc.Push(ctx, userID, model.SecretRecord{ID: id, Payload: payload}, baseRevision)
 	if err != nil {
-		return vaultError(err)
+		return s.fail("upload", err)
 	}
 	return stream.SendAndClose(&pb.PushResponse{Revision: revision})
 }
@@ -143,7 +150,7 @@ func (s *VaultService) Download(req *pb.DownloadRequest, stream pb.VaultService_
 
 	rec, err := s.svc.Get(stream.Context(), userID, req.GetId())
 	if err != nil {
-		return vaultError(err)
+		return s.fail("download", err)
 	}
 
 	for offset := 0; offset < len(rec.Payload); offset += transport.ChunkSize {
@@ -158,15 +165,26 @@ func (s *VaultService) Download(req *pb.DownloadRequest, stream pb.VaultService_
 	return nil
 }
 
-func vaultError(err error) error {
+// fail переводит ошибку в статус и логирует внутренние причины.
+func (s *VaultService) fail(op string, err error) error {
+	st := s.vaultError(op, err)
+	if status.Code(st) == codes.Internal {
+		s.logger.Error(op, zap.Error(err))
+	}
+	return st
+}
+
+func (s *VaultService) vaultError(op string, err error) error {
 	var conflict *storage.ConflictError
 	if errors.As(err, &conflict) {
-		return conflictStatus(conflict)
+		return s.conflictStatus(op, conflict)
 	}
 
 	switch {
 	case errors.Is(err, service.ErrNotFound):
 		return status.Error(codes.NotFound, "secret not found")
+	case errors.Is(err, service.ErrInvalidID):
+		return status.Error(codes.InvalidArgument, "secret id is empty")
 	case errors.Is(err, service.ErrPayloadTooLarge):
 		return status.Error(codes.InvalidArgument, "payload too large")
 	default:
@@ -176,7 +194,7 @@ func vaultError(err error) error {
 
 // conflictStatus кладёт актуальную версию записи в детали ошибки, чтобы клиент
 // показал пользователю обе версии и дал выбрать, какую оставить.
-func conflictStatus(conflict *storage.ConflictError) error {
+func (s *VaultService) conflictStatus(op string, conflict *storage.ConflictError) error {
 	st := status.New(codes.FailedPrecondition, "secret revision conflict")
 	current := conflict.Current
 	if current.ID == "" {
@@ -191,6 +209,9 @@ func conflictStatus(conflict *storage.ConflictError) error {
 		UpdatedAtUnixMs: current.UpdatedAt.UnixMilli(),
 	}})
 	if err != nil {
+		// Клиент получит конфликт без текущей версии и не покажет её
+		// пользователю, поэтому причина должна остаться хотя бы в журнале.
+		s.logger.Error(op+": attach conflict details", zap.Error(err))
 		return st.Err()
 	}
 	return withDetails.Err()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -15,12 +16,14 @@ import (
 type AuthService struct {
 	pb.UnimplementedAuthServiceServer
 
-	svc *service.Service
+	svc    *service.Service
+	logger *zap.Logger
 }
 
-// NewAuthService создаёт gRPC-обёртку над сервисом.
-func NewAuthService(svc *service.Service) *AuthService {
-	return &AuthService{svc: svc}
+// NewAuthService создаёт gRPC-обёртку над сервисом. Логгер передаётся явно:
+// компонент пишет в него под своим именем и не зависит от глобального состояния.
+func NewAuthService(svc *service.Service, logger *zap.Logger) *AuthService {
+	return &AuthService{svc: svc, logger: named(logger, "auth")}
 }
 
 // Register заводит пользователя и выдаёт токен.
@@ -34,7 +37,7 @@ func (s *AuthService) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 		Verifier:   req.GetVerifier(),
 	})
 	if err != nil {
-		return nil, authError(err)
+		return nil, s.fail("register", err)
 	}
 	return sessionResponse(session), nil
 }
@@ -43,7 +46,7 @@ func (s *AuthService) Register(ctx context.Context, req *pb.RegisterRequest) (*p
 func (s *AuthService) GetSalts(ctx context.Context, req *pb.GetSaltsRequest) (*pb.GetSaltsResponse, error) {
 	salts, err := s.svc.Salts(ctx, req.GetLogin())
 	if err != nil {
-		return nil, authError(err)
+		return nil, s.fail("get salts", err)
 	}
 	return &pb.GetSaltsResponse{SaltAuth: salts.SaltAuth, KdfVersion: salts.KDFVersion}, nil
 }
@@ -52,7 +55,7 @@ func (s *AuthService) GetSalts(ctx context.Context, req *pb.GetSaltsRequest) (*p
 func (s *AuthService) Login(ctx context.Context, req *pb.LoginRequest) (*pb.AuthResponse, error) {
 	session, err := s.svc.Login(ctx, req.GetLogin(), req.GetAuthKey())
 	if err != nil {
-		return nil, authError(err)
+		return nil, s.fail("login", err)
 	}
 	return sessionResponse(session), nil
 }
@@ -65,6 +68,16 @@ func sessionResponse(session service.Session) *pb.AuthResponse {
 		KdfVersion: session.KDFVersion,
 		Verifier:   session.Verifier,
 	}
+}
+
+// fail переводит ошибку в статус и логирует внутренние причины: клиенту
+// детали отдавать нельзя, но без записи в журнал поломка осталась бы незаметной.
+func (s *AuthService) fail(op string, err error) error {
+	st := authError(err)
+	if status.Code(st) == codes.Internal {
+		s.logger.Error(op, zap.Error(err))
+	}
+	return st
 }
 
 func authError(err error) error {

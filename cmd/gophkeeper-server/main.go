@@ -75,8 +75,8 @@ func run(logger *zap.Logger) error {
 		grpc.StreamInterceptor(grpcapi.StreamAuthInterceptor(tokens)),
 	)
 	server := grpc.NewServer(opts...)
-	pb.RegisterAuthServiceServer(server, grpcapi.NewAuthService(svc))
-	pb.RegisterVaultServiceServer(server, grpcapi.NewVaultService(svc))
+	pb.RegisterAuthServiceServer(server, grpcapi.NewAuthService(svc, logger))
+	pb.RegisterVaultServiceServer(server, grpcapi.NewVaultService(svc, logger))
 
 	listener, err := net.Listen("tcp", cfg.Address)
 	if err != nil {
