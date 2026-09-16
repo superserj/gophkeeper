@@ -34,12 +34,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		_ = logger.Sync()
-	}()
 
-	if err := run(logger); err != nil {
-		logger.Fatal("server stopped", zap.Error(err))
+	runErr := run(logger)
+	if runErr != nil {
+		logger.Error("server stopped", zap.Error(runErr))
+	}
+
+	// Fatal вызвал бы os.Exit в обход отложенных вызовов, и последние записи
+	// остались бы в буфере логгера, поэтому выход из процесса ровно один и
+	// делается уже после сброса буфера.
+	_ = logger.Sync()
+	if runErr != nil {
+		os.Exit(1)
 	}
 }
 
