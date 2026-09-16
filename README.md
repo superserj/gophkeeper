@@ -117,7 +117,7 @@ gophkeeper version
 gophkeeper -a 127.0.0.1:3200 --cacert server.crt register -l user
 gophkeeper -a 127.0.0.1:3200 --cacert server.crt login -l user
 gophkeeper add credentials --name bank --login user --meta "интернет-банк"
-gophkeeper add text --name note --file note.txt   # без --file текст вводится с клавиатуры
+gophkeeper add text --name note --file note.txt   # без --file текст вводится с клавиатуры, файл ожидается в UTF-8
 gophkeeper add binary --name archive --file archive.zip
 gophkeeper add card --name visa --holder "IVAN IVANOV" --expires 12/29
 gophkeeper list

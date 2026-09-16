@@ -181,6 +181,21 @@ func TestAddTextFromFileAndBinary(t *testing.T) {
 	}
 }
 
+func TestAddTextRejectsBrokenEncoding(t *testing.T) {
+	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
+	store := prepareStore(t)
+
+	path := filepath.Join(t.TempDir(), "cp1251.txt")
+	if err := os.WriteFile(path, []byte{0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2}, 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	// Такой файл не должен сохраняться молча испорченным.
+	if _, err := run(t, "--store", store, "add", "text", "--name", "note", "--file", path); err == nil {
+		t.Fatal("файл в другой кодировке принят как текст")
+	}
+}
+
 func TestAddCard(t *testing.T) {
 	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
 	store := prepareStore(t)

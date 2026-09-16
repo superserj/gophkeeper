@@ -54,6 +54,11 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "text in another encoding",
+			secret:  Secret{Kind: KindText, Name: "note", Text: string([]byte{0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2})},
+			wantErr: true,
+		},
+		{
 			name:    "unknown kind",
 			secret:  Secret{Kind: "otp", Name: "token"},
 			wantErr: true,
@@ -77,6 +82,15 @@ func TestValidateReportsEmptyName(t *testing.T) {
 	secret := Secret{Kind: KindText, Text: "секрет"}
 	if err := secret.Validate(); !errors.Is(err, ErrEmptyName) {
 		t.Fatalf("получено %v, ожидалась ErrEmptyName", err)
+	}
+}
+
+func TestValidateRejectsBrokenEncoding(t *testing.T) {
+	// «Привет» в Windows-1251: JSON заменил бы эти байты символом замены,
+	// и восстановить исходный текст стало бы нельзя.
+	secret := Secret{Kind: KindText, Name: "note", Text: string([]byte{0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2})}
+	if err := secret.Validate(); !errors.Is(err, ErrNotUTF8) {
+		t.Fatalf("получено %v, ожидалась ErrNotUTF8", err)
 	}
 }
 

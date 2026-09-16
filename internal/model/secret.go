@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // SecretKind — тип хранимой записи.
@@ -34,6 +35,13 @@ const MaxSecretSize = 10 << 20
 // ErrEmptyName возвращается, когда у записи нет названия: без него пользователь
 // не найдёт её в списке.
 var ErrEmptyName = errors.New("secret name is empty")
+
+// ErrNotUTF8 возвращается для текста, который не является корректным UTF-8.
+//
+// Отказ здесь намеренный: JSON заменил бы такие байты символом замены, и файл
+// в другой кодировке сохранился бы молча испорченным, без возможности вернуть
+// исходный текст. Для произвольных байтов есть тип KindBinary.
+var ErrNotUTF8 = errors.New("text is not valid UTF-8, store it as binary data")
 
 // Credentials — пара логин/пароль.
 type Credentials struct {
@@ -83,6 +91,9 @@ func (s *Secret) Validate() error {
 	case KindText:
 		if s.Text == "" {
 			return errors.New("text is empty")
+		}
+		if !utf8.ValidString(s.Text) {
+			return ErrNotUTF8
 		}
 	case KindBinary:
 		if len(s.Binary) == 0 {
