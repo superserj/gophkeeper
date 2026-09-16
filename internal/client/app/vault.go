@@ -413,10 +413,7 @@ func (v *Vault) push(ctx context.Context, change localstore.PendingChange) (*Con
 
 	rec.Revision = revision
 	rec.UpdatedAt = time.Now()
-	if err := v.store.PutServerRecord(rec); err != nil {
-		return nil, err
-	}
-	return nil, v.store.DropPending(change.ID)
+	return nil, v.store.CommitPushed(rec)
 }
 
 func (v *Vault) conflict(change localstore.PendingChange, conflict *remote.ConflictError) (*Conflict, error) {

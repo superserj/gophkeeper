@@ -225,6 +225,28 @@ func (s *Store) PutServerRecord(rec model.SecretRecord) error {
 	})
 }
 
+// CommitPushed переносит принятую сервером запись из очереди в снимок одной
+// транзакцией: раздельные записи оставили бы подтверждённое изменение в очереди,
+// и следующая синхронизация отправила бы его повторно — уже как конфликт.
+func (s *Store) CommitPushed(rec model.SecretRecord) error {
+	stored, err := json.Marshal(storedRecord{
+		Payload:   rec.Payload,
+		Deleted:   rec.Deleted,
+		Revision:  rec.Revision,
+		UpdatedAt: rec.UpdatedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal record: %w", err)
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.Bucket(bucketServer).Put([]byte(rec.ID), stored); err != nil {
+			return fmt.Errorf("put record: %w", err)
+		}
+		return tx.Bucket(bucketPending).Delete([]byte(rec.ID))
+	})
+}
+
 // ServerRecord возвращает запись снимка по идентификатору.
 func (s *Store) ServerRecord(id string) (model.SecretRecord, bool, error) {
 	var (

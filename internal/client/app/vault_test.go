@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.uber.org/zap/zaptest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -50,8 +51,8 @@ func startServer(t *testing.T) *bufconn.Listener {
 		grpc.StreamInterceptor(grpcapi.StreamAuthInterceptor(tokens)),
 	)
 	server := grpc.NewServer(opts...)
-	pb.RegisterAuthServiceServer(server, grpcapi.NewAuthService(svc))
-	pb.RegisterVaultServiceServer(server, grpcapi.NewVaultService(svc))
+	pb.RegisterAuthServiceServer(server, grpcapi.NewAuthService(svc, zaptest.NewLogger(t)))
+	pb.RegisterVaultServiceServer(server, grpcapi.NewVaultService(svc, zaptest.NewLogger(t)))
 
 	listener := bufconn.Listen(bufSize)
 	go func() {
