@@ -1,8 +1,8 @@
 -- +goose Up
 CREATE TABLE IF NOT EXISTS users (
-    id            BIGSERIAL PRIMARY KEY,
-    login         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    login         VARCHAR(64) NOT NULL UNIQUE,
+    password_hash VARCHAR(128) NOT NULL,
     salt_auth     BYTEA NOT NULL,
     salt_data     BYTEA NOT NULL,
     kdf_version   INT NOT NULL DEFAULT 1,

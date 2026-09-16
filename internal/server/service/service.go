@@ -16,14 +16,15 @@ import (
 
 // Ограничения на запросы, доступные без токена.
 const (
-	// MaxParallelKDF — сколько вычислений Argon2id идут одновременно: каждое
+	// maxParallelKDF — сколько вычислений Argon2id идут одновременно: каждое
 	// занимает 64 МиБ памяти.
-	MaxParallelKDF = 4
-	// MaxPendingKDF — сколько запросов ждут своей очереди. Ожидающий запрос
+	maxParallelKDF = 4
+	// maxPendingKDF — сколько запросов ждут своей очереди. Ожидающий запрос
 	// держит в памяти своё тело, поэтому очередь тоже ограничена: при перегрузке
 	// сервер честно отказывает вместо того, чтобы копить запросы до отказа памяти.
-	MaxPendingKDF = 32
-	// MaxLoginLength — предел длины логина.
+	maxPendingKDF = 32
+	// MaxLoginLength — предел длины логина. Совпадает с шириной колонки login
+	// в схеме базы: длиннее всё равно не сохранится.
 	MaxLoginLength = 64
 	// MaxVerifierSize — предел размера верификатора: он шифрует короткую
 	// контрольную строку, и больше этого значения там быть нечему.
@@ -96,8 +97,8 @@ func New(repo Repository, tokens *auth.TokenManager) *Service {
 	return &Service{
 		repo:    repo,
 		tokens:  tokens,
-		kdf:     semaphore.NewWeighted(MaxParallelKDF),
-		pending: semaphore.NewWeighted(MaxPendingKDF),
+		kdf:     semaphore.NewWeighted(maxParallelKDF),
+		pending: semaphore.NewWeighted(maxPendingKDF),
 	}
 }
 
