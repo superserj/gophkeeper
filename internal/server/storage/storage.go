@@ -32,8 +32,13 @@ var (
 
 const uniqueViolation = "23505"
 
-// pullPageSize — сколько изменений читается из базы за один запрос.
-const pullPageSize = 100
+// Ограничения страницы изменений. Одна запись может весить до model.MaxSecretSize,
+// поэтому кроме числа записей страница ограничена и суммарным объёмом: иначе сотня
+// больших записей заняла бы гигабайт памяти ещё до отправки первого сообщения.
+const (
+	pullPageSize  = 100
+	pullPageBytes = 8 << 20
+)
 
 // User — профиль пользователя. Пароль и ключ шифрования сервер не хранит:
 // password_hash считается от authKey, а verifier расшифровывается только клиентом.
@@ -139,14 +144,15 @@ func (s *Storage) EachSecretSince(ctx context.Context, userID, since int64, fn f
 			return err
 		}
 
+		if len(page) == 0 {
+			return nil
+		}
+
 		for _, rec := range page {
 			if err := fn(rec); err != nil {
 				return err
 			}
 			since = rec.Revision
-		}
-		if len(page) < pullPageSize {
-			return nil
 		}
 	}
 }
@@ -162,13 +168,23 @@ func (s *Storage) secretsPage(ctx context.Context, userID, since int64) ([]model
 	}
 	defer rows.Close()
 
-	page := make([]model.SecretRecord, 0, pullPageSize)
+	var (
+		page  []model.SecretRecord
+		bytes int
+	)
 	for rows.Next() {
 		var rec model.SecretRecord
 		if err := rows.Scan(&rec.ID, &rec.Payload, &rec.Deleted, &rec.Revision, &rec.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan change: %w", err)
 		}
+
 		page = append(page, rec)
+		bytes += len(rec.Payload)
+		// Первая запись берётся всегда, даже если она одна больше бюджета:
+		// иначе синхронизация встала бы на ней навсегда.
+		if bytes >= pullPageBytes {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read changes: %w", err)

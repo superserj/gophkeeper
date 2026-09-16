@@ -158,6 +158,54 @@ func TestEachSecretSinceOrdersByRevision(t *testing.T) {
 	}
 }
 
+func TestEachSecretSinceReturnsEverythingAcrossPages(t *testing.T) {
+	ctx := t.Context()
+	store := newStorage(t)
+	userID := newUser(t, store, uniqueLogin(t))
+
+	// Записи заведомо не помещаются в одну страницу ни по объёму, ни по числу:
+	// постраничное чтение не должно терять их и повторять.
+	const (
+		count       = 5
+		payloadSize = 3 << 20
+	)
+	payload := make([]byte, payloadSize)
+	ids := make(map[string]bool, count)
+	for i := 0; i < count; i++ {
+		id := newUUID(t)
+		ids[id] = false
+		if _, err := store.SaveSecret(ctx, userID, model.SecretRecord{ID: id, Payload: payload}, 0); err != nil {
+			t.Fatalf("SaveSecret: %v", err)
+		}
+	}
+
+	var previous int64
+	err := store.EachSecretSince(ctx, userID, 0, func(rec model.SecretRecord) error {
+		seen, known := ids[rec.ID]
+		if !known {
+			t.Fatalf("пришла чужая запись %s", rec.ID)
+		}
+		if seen {
+			t.Fatalf("запись %s пришла дважды", rec.ID)
+		}
+		if rec.Revision <= previous {
+			t.Fatalf("ревизии не растут: %d после %d", rec.Revision, previous)
+		}
+		ids[rec.ID] = true
+		previous = rec.Revision
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("EachSecretSince: %v", err)
+	}
+
+	for id, seen := range ids {
+		if !seen {
+			t.Fatalf("запись %s потерялась между страницами", id)
+		}
+	}
+}
+
 func TestEachSecretSinceStopsOnError(t *testing.T) {
 	ctx := t.Context()
 	store := newStorage(t)

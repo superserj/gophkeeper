@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -15,16 +17,26 @@ import (
 	pb "github.com/superserj/gophkeeper/proto/gophkeeper/v1"
 )
 
+// Ограничения приёма больших записей. Загрузка копит полезную нагрузку в памяти
+// до конца потока, поэтому число одновременных загрузок и время их жизни
+// ограничены: иначе клиент открыл бы сколько угодно потоков по MaxSecretSize
+// каждый и исчерпал бы память сервера.
+const (
+	maxParallelUploads = 8
+	uploadTimeout      = 2 * time.Minute
+)
+
 // VaultService отдаёт и принимает шифротексты пользователя.
 type VaultService struct {
 	pb.UnimplementedVaultServiceServer
 
-	svc *service.Service
+	svc     *service.Service
+	uploads *semaphore.Weighted
 }
 
 // NewVaultService создаёт gRPC-обёртку над сервисом.
 func NewVaultService(svc *service.Service) *VaultService {
-	return &VaultService{svc: svc}
+	return &VaultService{svc: svc, uploads: semaphore.NewWeighted(maxParallelUploads)}
 }
 
 // Push сохраняет запись поверх известной клиенту ревизии.
@@ -75,6 +87,16 @@ func (s *VaultService) Upload(stream pb.VaultService_UploadServer) error {
 		return status.Error(codes.Unauthenticated, "missing token")
 	}
 
+	if !s.uploads.TryAcquire(1) {
+		return status.Error(codes.ResourceExhausted, "too many uploads, try again later")
+	}
+	defer s.uploads.Release(1)
+
+	// Поток, в который перестали писать, держал бы слот и свой буфер сколько
+	// угодно долго, поэтому у загрузки есть предельное время.
+	ctx, cancel := context.WithTimeout(stream.Context(), uploadTimeout)
+	defer cancel()
+
 	var (
 		id           string
 		baseRevision int64
@@ -82,6 +104,10 @@ func (s *VaultService) Upload(stream pb.VaultService_UploadServer) error {
 		first        = true
 	)
 	for {
+		if err := ctx.Err(); err != nil {
+			return status.Error(codes.DeadlineExceeded, "upload took too long")
+		}
+
 		chunk, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
@@ -101,7 +127,7 @@ func (s *VaultService) Upload(stream pb.VaultService_UploadServer) error {
 		return status.Error(codes.InvalidArgument, "secret id is empty")
 	}
 
-	revision, err := s.svc.Push(stream.Context(), userID, model.SecretRecord{ID: id, Payload: payload}, baseRevision)
+	revision, err := s.svc.Push(ctx, userID, model.SecretRecord{ID: id, Payload: payload}, baseRevision)
 	if err != nil {
 		return vaultError(err)
 	}
