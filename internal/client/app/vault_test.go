@@ -265,6 +265,28 @@ func TestResolveLocalPublishesOwnVersion(t *testing.T) {
 	}
 }
 
+func TestResolveLocalReportsNewerServerVersion(t *testing.T) {
+	ctx := t.Context()
+	listener := startServer(t)
+	id, second, third := conflictingClients(t, listener)
+
+	// Пока владелец выбирал версию, запись успели изменить на сервере ещё раз:
+	// локальная правка отправляется поверх устаревшей базовой ревизии.
+	if _, err := third.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if err := third.Update(id, credentialsSecret("bank", "user", "from-third")); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if _, err := third.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	if err := second.ResolveLocal(ctx, id); !errors.Is(err, app.ErrConflictChangedAgain) {
+		t.Fatalf("получено %v, ожидалась ErrConflictChangedAgain", err)
+	}
+}
+
 func TestResolveRemoteDropsLocalVersion(t *testing.T) {
 	listener := startServer(t)
 	id, second, _ := conflictingClients(t, listener)

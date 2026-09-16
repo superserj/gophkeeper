@@ -41,6 +41,9 @@ var (
 	ErrNotLoggedIn = errors.New("not logged in, run register or login first")
 	// ErrForeignStore возвращается при попытке войти в хранилище другого владельца.
 	ErrForeignStore = errors.New("local store belongs to another account, use --store with another path")
+	// ErrConflictChangedAgain возвращается, когда во время разрешения конфликта
+	// запись успели изменить на сервере ещё раз.
+	ErrConflictChangedAgain = errors.New("secret changed on the server again")
 )
 
 // Vault — открытое хранилище одного пользователя.
@@ -368,7 +371,7 @@ func (v *Vault) ResolveLocal(ctx context.Context, id string) error {
 		return err
 	}
 	if conflict != nil {
-		return errors.New("secret changed again during resolution, run sync once more")
+		return ErrConflictChangedAgain
 	}
 	return nil
 }
@@ -402,7 +405,18 @@ func (v *Vault) push(ctx context.Context, change localstore.PendingChange) (*Con
 
 	var conflict *remote.ConflictError
 	if errors.As(err, &conflict) {
-		return v.conflict(change, conflict)
+		out, err := v.conflict(change, conflict)
+		if err != nil {
+			return nil, err
+		}
+		// Серверная версия запоминается здесь, рядом с CommitPushed: из неё
+		// ResolveLocal берёт базовую ревизию для повторной отправки.
+		if conflict.Current.ID != "" {
+			if err := v.store.PutServerRecord(conflict.Current); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
 	}
 	if err != nil {
 		return nil, err
@@ -413,6 +427,7 @@ func (v *Vault) push(ctx context.Context, change localstore.PendingChange) (*Con
 	return nil, v.store.CommitPushed(rec)
 }
 
+// conflict расшифровывает обе версии записи, чтобы показать их владельцу.
 func (v *Vault) conflict(change localstore.PendingChange, conflict *remote.ConflictError) (*Conflict, error) {
 	out := &Conflict{ID: change.ID}
 
@@ -429,11 +444,6 @@ func (v *Vault) conflict(change localstore.PendingChange, conflict *remote.Confl
 			return nil, err
 		}
 		out.Remote = current
-	}
-	if conflict.Current.ID != "" {
-		if err := v.store.PutServerRecord(conflict.Current); err != nil {
-			return nil, err
-		}
 	}
 	return out, nil
 }

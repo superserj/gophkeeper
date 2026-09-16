@@ -425,7 +425,11 @@ func resolveConflict(cmd *cobra.Command, vault *app.Vault, resolve, id string) e
 	}
 	switch resolve {
 	case "local":
-		if err := vault.ResolveLocal(cmd.Context(), id); err != nil {
+		err := vault.ResolveLocal(cmd.Context(), id)
+		if errors.Is(err, app.ErrConflictChangedAgain) {
+			return fmt.Errorf("%w: run sync and resolve %s once more", err, id)
+		}
+		if err != nil {
 			return err
 		}
 		return writeLines(cmd.OutOrStdout(), "local version published")
