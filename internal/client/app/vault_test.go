@@ -1,7 +1,9 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"net"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"github.com/superserj/gophkeeper/internal/server/grpcapi"
 	"github.com/superserj/gophkeeper/internal/server/service"
 	"github.com/superserj/gophkeeper/internal/server/storage/memory"
+	"github.com/superserj/gophkeeper/internal/transport"
 	pb "github.com/superserj/gophkeeper/proto/gophkeeper/v1"
 )
 
@@ -27,6 +30,9 @@ const (
 	bufSize    = 1024 * 1024
 	testLogin  = "user"
 	testMaster = "master password"
+	// defaultGRPCMessageSize — лимит сообщения gRPC по умолчанию, который
+	// пакет transport поднимает ради больших записей.
+	defaultGRPCMessageSize = 4 << 20
 )
 
 // startServer поднимает настоящий сервер поверх bufconn: тесты проходят весь путь
@@ -37,10 +43,13 @@ func startServer(t *testing.T) *bufconn.Listener {
 	tokens := auth.NewTokenManager("test-secret", auth.TokenTTL)
 	svc := service.New(memory.New(), tokens)
 
-	server := grpc.NewServer(
+	// Лимиты берутся те же, что и в бою: с дефолтными 4 МиБ большая запись
+	// не прошла бы обратно потоком Pull, и тест должен это ловить.
+	opts := append(transport.ServerOptions(),
 		grpc.UnaryInterceptor(grpcapi.UnaryAuthInterceptor(tokens)),
 		grpc.StreamInterceptor(grpcapi.StreamAuthInterceptor(tokens)),
 	)
+	server := grpc.NewServer(opts...)
 	pb.RegisterAuthServiceServer(server, grpcapi.NewAuthService(svc))
 	pb.RegisterVaultServiceServer(server, grpcapi.NewVaultService(svc))
 
@@ -58,12 +67,14 @@ func startServer(t *testing.T) *bufconn.Listener {
 func newClient(t *testing.T, listener *bufconn.Listener) *remote.Client {
 	t.Helper()
 
-	conn, err := grpc.NewClient("passthrough:///bufnet",
+	opts := append(transport.DialOptions(),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
+
+	conn, err := grpc.NewClient("passthrough:///bufnet", opts...)
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
@@ -367,9 +378,12 @@ func TestBinarySecretGoesThroughUpload(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	payload := make([]byte, app.UploadThreshold+1)
-	for i := range payload {
-		payload[i] = byte(i % 251)
+	// Больше дефолтного лимита gRPC-сообщения: запись уходит потоком Upload,
+	// а обратно приходит одним сообщением Pull, которое без поднятых лимитов
+	// не пролезло бы.
+	payload := make([]byte, defaultGRPCMessageSize+1)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatalf("rand.Read: %v", err)
 	}
 	id, err := vault.Add(&model.Secret{Kind: model.KindBinary, Name: "archive", Binary: payload})
 	if err != nil {
@@ -391,8 +405,8 @@ func TestBinarySecretGoesThroughUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(secret.Binary) != len(payload) || secret.Binary[7] != payload[7] {
-		t.Fatalf("бинарные данные доехали повреждёнными: %d байт", len(secret.Binary))
+	if !bytes.Equal(secret.Binary, payload) {
+		t.Fatalf("бинарные данные доехали повреждёнными: получено %d байт из %d", len(secret.Binary), len(payload))
 	}
 }
 

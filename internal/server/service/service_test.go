@@ -155,7 +155,13 @@ func TestLoginRejectsWrongKey(t *testing.T) {
 	if _, err := svc.Register(ctx, credentials(t, testLogin)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, err := svc.Login(ctx, testLogin, []byte("wrong")); !errors.Is(err, service.ErrBadCredentials) {
+	// Ключ нужной длины, но выведенный из другого пароля: иначе запрос отсеется
+	// проверкой размера и тест пройдёт даже без сверки с хешем.
+	wrongKey := crypto.DeriveAuthKey("another password", make([]byte, crypto.SaltSize))
+	if len(wrongKey) != crypto.KeySize {
+		t.Fatalf("длина ключа %d, ожидалась %d", len(wrongKey), crypto.KeySize)
+	}
+	if _, err := svc.Login(ctx, testLogin, wrongKey); !errors.Is(err, service.ErrBadCredentials) {
 		t.Fatalf("неверный ключ дал %v, ожидалась ErrBadCredentials", err)
 	}
 	if _, err := svc.Login(ctx, "absent", crypto.DeriveAuthKey("x", make([]byte, crypto.SaltSize))); !errors.Is(err, service.ErrBadCredentials) {
