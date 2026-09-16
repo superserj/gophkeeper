@@ -31,7 +31,7 @@ func newStorage(t *testing.T) *storage.Storage {
 	return store
 }
 
-func newUser(t *testing.T, store *storage.Storage, login string) int64 {
+func newUser(t *testing.T, store *storage.Storage, login string) string {
 	t.Helper()
 
 	id, err := store.CreateUser(t.Context(), storage.User{
@@ -296,7 +296,11 @@ func TestSaveSecretRejectsUnknownUser(t *testing.T) {
 	ctx := t.Context()
 	store := newStorage(t)
 
-	if _, err := store.SaveSecret(ctx, -1, model.SecretRecord{ID: newUUID(t)}, 0); !errors.Is(err, storage.ErrUserNotFound) {
+	if _, err := store.SaveSecret(ctx, "-1", model.SecretRecord{ID: newUUID(t)}, 0); !errors.Is(err, storage.ErrUserNotFound) {
+		t.Fatalf("получено %v, ожидалась ErrUserNotFound", err)
+	}
+	// Идентификатор не в формате ключа схемы — это чужой пользователь, а не сбой.
+	if _, err := store.SaveSecret(ctx, "not-a-key", model.SecretRecord{ID: newUUID(t)}, 0); !errors.Is(err, storage.ErrUserNotFound) {
 		t.Fatalf("получено %v, ожидалась ErrUserNotFound", err)
 	}
 }

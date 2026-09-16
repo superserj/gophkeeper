@@ -110,10 +110,17 @@ func NewTokenManager(secret string, ttl time.Duration) *TokenManager {
 }
 
 // Issue выпускает токен для пользователя.
-func (m *TokenManager) Issue(userID int64) (string, error) {
+//
+// Идентификатор строковый: формат ключа принадлежит хранилищу, и подписка на
+// его числовую природу заставила бы переписывать аутентификацию при смене формата.
+func (m *TokenManager) Issue(userID string) (string, error) {
+	if userID == "" {
+		return "", errors.New("user id is empty")
+	}
+
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
-		Subject:   strconv.FormatInt(userID, 10),
+		Subject:   userID,
 		IssuedAt:  jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(now.Add(m.ttl)),
 	}
@@ -125,7 +132,7 @@ func (m *TokenManager) Issue(userID int64) (string, error) {
 }
 
 // Parse проверяет токен и возвращает идентификатор пользователя.
-func (m *TokenManager) Parse(token string) (int64, error) {
+func (m *TokenManager) Parse(token string) (string, error) {
 	var claims jwt.RegisteredClaims
 	parsed, err := jwt.ParseWithClaims(token, &claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -133,13 +140,8 @@ func (m *TokenManager) Parse(token string) (int64, error) {
 		}
 		return m.secret, nil
 	})
-	if err != nil || !parsed.Valid {
-		return 0, ErrBadToken
+	if err != nil || !parsed.Valid || claims.Subject == "" {
+		return "", ErrBadToken
 	}
-
-	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
-	if err != nil {
-		return 0, ErrBadToken
-	}
-	return userID, nil
+	return claims.Subject, nil
 }

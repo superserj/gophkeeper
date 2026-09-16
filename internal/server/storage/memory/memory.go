@@ -6,6 +6,7 @@ package memory
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,7 +19,7 @@ type Storage struct {
 	mu       sync.RWMutex
 	nextID   int64
 	users    map[string]*userState
-	byUserID map[int64]*userState
+	byUserID map[string]*userState
 }
 
 type userState struct {
@@ -31,21 +32,21 @@ type userState struct {
 func New() *Storage {
 	return &Storage{
 		users:    make(map[string]*userState),
-		byUserID: make(map[int64]*userState),
+		byUserID: make(map[string]*userState),
 	}
 }
 
 // CreateUser заводит пользователя.
-func (s *Storage) CreateUser(_ context.Context, u storage.User) (int64, error) {
+func (s *Storage) CreateUser(_ context.Context, u storage.User) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.users[u.Login]; ok {
-		return 0, storage.ErrLoginTaken
+		return "", storage.ErrLoginTaken
 	}
 
 	s.nextID++
-	u.ID = s.nextID
+	u.ID = strconv.FormatInt(s.nextID, 10)
 	state := &userState{user: u, secrets: make(map[string]model.SecretRecord)}
 	s.users[u.Login] = state
 	s.byUserID[u.ID] = state
@@ -65,7 +66,7 @@ func (s *Storage) GetUserByLogin(_ context.Context, login string) (storage.User,
 }
 
 // GetSecret возвращает запись пользователя.
-func (s *Storage) GetSecret(_ context.Context, userID int64, id string) (model.SecretRecord, error) {
+func (s *Storage) GetSecret(_ context.Context, userID, id string) (model.SecretRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -81,7 +82,7 @@ func (s *Storage) GetSecret(_ context.Context, userID int64, id string) (model.S
 }
 
 // EachSecretSince передаёт изменения пользователя по возрастанию ревизии.
-func (s *Storage) EachSecretSince(_ context.Context, userID, since int64, fn func(model.SecretRecord) error) error {
+func (s *Storage) EachSecretSince(_ context.Context, userID string, since int64, fn func(model.SecretRecord) error) error {
 	s.mu.RLock()
 	state, ok := s.byUserID[userID]
 	if !ok {
@@ -107,7 +108,7 @@ func (s *Storage) EachSecretSince(_ context.Context, userID, since int64, fn fun
 }
 
 // SaveSecret сохраняет запись поверх известной клиенту ревизии.
-func (s *Storage) SaveSecret(_ context.Context, userID int64, rec model.SecretRecord, baseRevision int64) (int64, error) {
+func (s *Storage) SaveSecret(_ context.Context, userID string, rec model.SecretRecord, baseRevision int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

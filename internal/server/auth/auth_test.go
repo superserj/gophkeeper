@@ -64,7 +64,7 @@ func TestVerifyRejectsBrokenHash(t *testing.T) {
 func TestTokenRoundTrip(t *testing.T) {
 	manager := NewTokenManager("secret", TokenTTL)
 
-	token, err := manager.Issue(42)
+	token, err := manager.Issue("42")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -72,13 +72,13 @@ func TestTokenRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if userID != 42 {
-		t.Fatalf("получен пользователь %d, ожидался 42", userID)
+	if userID != "42" {
+		t.Fatalf("получен пользователь %q, ожидался 42", userID)
 	}
 }
 
 func TestParseRejectsForeignSecret(t *testing.T) {
-	token, err := NewTokenManager("secret", TokenTTL).Issue(1)
+	token, err := NewTokenManager("secret", TokenTTL).Issue("1")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -104,6 +104,27 @@ func TestParseRejectsExpiredToken(t *testing.T) {
 
 	if _, err := manager.Parse(token); !errors.Is(err, ErrBadToken) {
 		t.Fatalf("просроченный токен дал %v, ожидалась ErrBadToken", err)
+	}
+}
+
+func TestIssueRejectsEmptyUserID(t *testing.T) {
+	if _, err := NewTokenManager("secret", TokenTTL).Issue(""); err == nil {
+		t.Fatal("выпущен токен без идентификатора пользователя")
+	}
+}
+
+func TestParseRejectsTokenWithoutSubject(t *testing.T) {
+	manager := NewTokenManager("secret", TokenTTL)
+
+	empty := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	})
+	token, err := empty.SignedString([]byte("secret"))
+	if err != nil {
+		t.Fatalf("SignedString: %v", err)
+	}
+	if _, err := manager.Parse(token); !errors.Is(err, ErrBadToken) {
+		t.Fatalf("токен без идентификатора дал %v, ожидалась ErrBadToken", err)
 	}
 }
 

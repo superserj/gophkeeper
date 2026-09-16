@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -42,8 +43,10 @@ const (
 
 // User — профиль пользователя. Пароль и ключ шифрования сервер не хранит:
 // password_hash считается от authKey, а verifier расшифровывается только клиентом.
+//
+// Идентификатор строковый: числовой ключ — деталь схемы, и наружу она не выходит.
 type User struct {
-	ID           int64
+	ID           string
 	Login        string
 	PasswordHash string
 	SaltAuth     []byte
@@ -79,7 +82,7 @@ func (s *Storage) Close() {
 }
 
 // CreateUser заводит пользователя и возвращает его идентификатор.
-func (s *Storage) CreateUser(ctx context.Context, u User) (int64, error) {
+func (s *Storage) CreateUser(ctx context.Context, u User) (string, error) {
 	const query = `INSERT INTO users (login, password_hash, salt_auth, salt_data, kdf_version, verifier)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
 
@@ -89,11 +92,11 @@ func (s *Storage) CreateUser(ctx context.Context, u User) (int64, error) {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
-			return 0, ErrLoginTaken
+			return "", ErrLoginTaken
 		}
-		return 0, fmt.Errorf("insert user: %w", err)
+		return "", fmt.Errorf("insert user: %w", err)
 	}
-	return id, nil
+	return formatUserID(id), nil
 }
 
 // GetUserByLogin возвращает профиль пользователя.
@@ -101,25 +104,51 @@ func (s *Storage) GetUserByLogin(ctx context.Context, login string) (User, error
 	const query = `SELECT id, login, password_hash, salt_auth, salt_data, kdf_version, verifier
 		FROM users WHERE login = $1`
 
-	var u User
+	var (
+		u  User
+		id int64
+	)
 	err := s.pool.QueryRow(ctx, query, login).Scan(
-		&u.ID, &u.Login, &u.PasswordHash, &u.SaltAuth, &u.SaltData, &u.KDFVersion, &u.Verifier)
+		&id, &u.Login, &u.PasswordHash, &u.SaltAuth, &u.SaltData, &u.KDFVersion, &u.Verifier)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("select user: %w", err)
 	}
+
+	u.ID = formatUserID(id)
 	return u, nil
 }
 
+// formatUserID и parseUserID держат числовой ключ схемы внутри хранилища.
+func formatUserID(id int64) string {
+	return strconv.FormatInt(id, 10)
+}
+
+// parseUserID переводит идентификатор в ключ схемы. Идентификатор приходит из
+// подписанного токена, поэтому неразбираемое значение означает чужого или
+// удалённого пользователя, а не ошибку сервера.
+func parseUserID(userID string) (int64, error) {
+	id, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return 0, ErrUserNotFound
+	}
+	return id, nil
+}
+
 // GetSecret возвращает одну запись пользователя.
-func (s *Storage) GetSecret(ctx context.Context, userID int64, id string) (model.SecretRecord, error) {
+func (s *Storage) GetSecret(ctx context.Context, userID, id string) (model.SecretRecord, error) {
 	const query = `SELECT id, payload, deleted, revision, updated_at
 		FROM secrets WHERE user_id = $1 AND id = $2`
 
+	key, err := parseUserID(userID)
+	if err != nil {
+		return model.SecretRecord{}, err
+	}
+
 	var rec model.SecretRecord
-	err := s.pool.QueryRow(ctx, query, userID, id).Scan(
+	err = s.pool.QueryRow(ctx, query, key, id).Scan(
 		&rec.ID, &rec.Payload, &rec.Deleted, &rec.Revision, &rec.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.SecretRecord{}, ErrSecretNotFound
@@ -137,7 +166,11 @@ func (s *Storage) GetSecret(ctx context.Context, userID int64, id string) (model
 // Изменения читаются страницами, и соединение возвращается в пул до вызова fn:
 // иначе клиент, перестающий читать поток, держал бы соединение всё это время и
 // несколько таких клиентов исчерпали бы пул.
-func (s *Storage) EachSecretSince(ctx context.Context, userID, since int64, fn func(model.SecretRecord) error) error {
+func (s *Storage) EachSecretSince(ctx context.Context, userID string, since int64, fn func(model.SecretRecord) error) error {
+	if _, err := parseUserID(userID); err != nil {
+		return err
+	}
+
 	for {
 		page, err := s.secretsPage(ctx, userID, since)
 		if err != nil {
@@ -158,11 +191,16 @@ func (s *Storage) EachSecretSince(ctx context.Context, userID, since int64, fn f
 }
 
 // secretsPage читает очередную страницу изменений и закрывает запрос до возврата.
-func (s *Storage) secretsPage(ctx context.Context, userID, since int64) ([]model.SecretRecord, error) {
+func (s *Storage) secretsPage(ctx context.Context, userID string, since int64) ([]model.SecretRecord, error) {
 	const query = `SELECT id, payload, deleted, revision, updated_at
 		FROM secrets WHERE user_id = $1 AND revision > $2 ORDER BY revision LIMIT $3`
 
-	rows, err := s.pool.Query(ctx, query, userID, since, pullPageSize)
+	key, err := parseUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, query, key, since, pullPageSize)
 	if err != nil {
 		return nil, fmt.Errorf("select changes: %w", err)
 	}
@@ -198,7 +236,12 @@ func (s *Storage) secretsPage(ctx context.Context, userID, since int64) ([]model
 // пользователя, поэтому параллельные клиенты одного владельца получают плотную
 // возрастающую нумерацию. Если запись успели изменить, возвращается ErrConflict
 // с актуальной версией.
-func (s *Storage) SaveSecret(ctx context.Context, userID int64, rec model.SecretRecord, baseRevision int64) (int64, error) {
+func (s *Storage) SaveSecret(ctx context.Context, userID string, rec model.SecretRecord, baseRevision int64) (int64, error) {
+	key, err := parseUserID(userID)
+	if err != nil {
+		return 0, err
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
@@ -208,14 +251,14 @@ func (s *Storage) SaveSecret(ctx context.Context, userID int64, rec model.Secret
 	}()
 
 	var userRevision int64
-	if err := tx.QueryRow(ctx, `SELECT revision FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&userRevision); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT revision FROM users WHERE id = $1 FOR UPDATE`, key).Scan(&userRevision); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, ErrUserNotFound
 		}
 		return 0, fmt.Errorf("lock user: %w", err)
 	}
 
-	current, err := currentSecret(ctx, tx, userID, rec.ID)
+	current, err := currentSecret(ctx, tx, key, rec.ID)
 	switch {
 	case errors.Is(err, ErrSecretNotFound):
 		if baseRevision != 0 {
@@ -229,7 +272,7 @@ func (s *Storage) SaveSecret(ctx context.Context, userID int64, rec model.Secret
 
 	const updateUser = `UPDATE users SET revision = revision + 1 WHERE id = $1 RETURNING revision`
 	var revision int64
-	if err := tx.QueryRow(ctx, updateUser, userID).Scan(&revision); err != nil {
+	if err := tx.QueryRow(ctx, updateUser, key).Scan(&revision); err != nil {
 		return 0, fmt.Errorf("bump revision: %w", err)
 	}
 
@@ -244,7 +287,7 @@ func (s *Storage) SaveSecret(ctx context.Context, userID int64, rec model.Secret
 		ON CONFLICT (user_id, id) DO UPDATE
 		SET revision = EXCLUDED.revision, payload = EXCLUDED.payload,
 		    deleted = EXCLUDED.deleted, updated_at = EXCLUDED.updated_at`
-	if _, err := tx.Exec(ctx, upsert, userID, rec.ID, revision, rec.Payload, rec.Deleted); err != nil {
+	if _, err := tx.Exec(ctx, upsert, key, rec.ID, revision, rec.Payload, rec.Deleted); err != nil {
 		return 0, fmt.Errorf("upsert secret: %w", err)
 	}
 

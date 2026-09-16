@@ -33,11 +33,11 @@ const (
 
 // Repository — доступ к хранилищу, нужный сервису.
 type Repository interface {
-	CreateUser(ctx context.Context, u storage.User) (int64, error)
+	CreateUser(ctx context.Context, u storage.User) (string, error)
 	GetUserByLogin(ctx context.Context, login string) (storage.User, error)
-	GetSecret(ctx context.Context, userID int64, id string) (model.SecretRecord, error)
-	EachSecretSince(ctx context.Context, userID, since int64, fn func(model.SecretRecord) error) error
-	SaveSecret(ctx context.Context, userID int64, rec model.SecretRecord, baseRevision int64) (int64, error)
+	GetSecret(ctx context.Context, userID, id string) (model.SecretRecord, error)
+	EachSecretSince(ctx context.Context, userID string, since int64, fn func(model.SecretRecord) error) error
+	SaveSecret(ctx context.Context, userID string, rec model.SecretRecord, baseRevision int64) (int64, error)
 }
 
 // Ошибки сервиса.
@@ -54,6 +54,9 @@ var (
 	ErrEmptyLogin = errors.New("login is empty")
 	// ErrBusy возвращается, когда очередь на вывод ключей переполнена.
 	ErrBusy = errors.New("server is busy")
+	// ErrInvalidID возвращается на пустой идентификатор записи: это неверно
+	// сформированный запрос, а не отсутствующий ресурс.
+	ErrInvalidID = errors.New("secret id is empty")
 )
 
 // Credentials — данные, которые клиент присылает при регистрации.
@@ -223,23 +226,23 @@ func (s *Service) acquireKDF(ctx context.Context) (func(), error) {
 }
 
 // Push сохраняет шифротекст поверх версии baseRevision.
-func (s *Service) Push(ctx context.Context, userID int64, rec model.SecretRecord, baseRevision int64) (int64, error) {
+func (s *Service) Push(ctx context.Context, userID string, rec model.SecretRecord, baseRevision int64) (int64, error) {
 	if len(rec.Payload) > model.MaxSecretSize {
 		return 0, ErrPayloadTooLarge
 	}
 	if rec.ID == "" {
-		return 0, ErrNotFound
+		return 0, ErrInvalidID
 	}
 	return s.repo.SaveSecret(ctx, userID, rec, baseRevision)
 }
 
 // Pull передаёт в fn изменения пользователя с ревизией больше since.
-func (s *Service) Pull(ctx context.Context, userID, since int64, fn func(model.SecretRecord) error) error {
+func (s *Service) Pull(ctx context.Context, userID string, since int64, fn func(model.SecretRecord) error) error {
 	return s.repo.EachSecretSince(ctx, userID, since, fn)
 }
 
 // Get возвращает одну запись пользователя.
-func (s *Service) Get(ctx context.Context, userID int64, id string) (model.SecretRecord, error) {
+func (s *Service) Get(ctx context.Context, userID, id string) (model.SecretRecord, error) {
 	rec, err := s.repo.GetSecret(ctx, userID, id)
 	if errors.Is(err, storage.ErrSecretNotFound) {
 		return model.SecretRecord{}, ErrNotFound

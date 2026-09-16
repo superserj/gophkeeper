@@ -16,6 +16,9 @@ import (
 const (
 	testLogin  = "user"
 	testMaster = "master password"
+	// firstUserID — идентификатор, который хранилище в памяти выдаёт первому
+	// зарегистрированному пользователю.
+	firstUserID = "1"
 )
 
 func newService() *service.Service {
@@ -243,8 +246,9 @@ func TestPushRejectsHugePayloadAndEmptyID(t *testing.T) {
 	if _, err := svc.Push(ctx, userID, model.SecretRecord{ID: "a", Payload: huge}, 0); !errors.Is(err, service.ErrPayloadTooLarge) {
 		t.Fatalf("получено %v, ожидалась ErrPayloadTooLarge", err)
 	}
-	if _, err := svc.Push(ctx, userID, model.SecretRecord{Payload: []byte("x")}, 0); !errors.Is(err, service.ErrNotFound) {
-		t.Fatalf("пустой идентификатор дал %v", err)
+	// Пустой идентификатор — некорректный запрос, а не отсутствующая запись.
+	if _, err := svc.Push(ctx, userID, model.SecretRecord{Payload: []byte("x")}, 0); !errors.Is(err, service.ErrInvalidID) {
+		t.Fatalf("пустой идентификатор дал %v, ожидалась ErrInvalidID", err)
 	}
 }
 
@@ -314,11 +318,11 @@ func TestGetHidesDeletedSecret(t *testing.T) {
 	}
 }
 
-func register(t *testing.T, svc *service.Service) int64 {
+func register(t *testing.T, svc *service.Service) string {
 	t.Helper()
 
 	if _, err := svc.Register(t.Context(), credentials(t, testLogin)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	return 1
+	return firstUserID
 }
