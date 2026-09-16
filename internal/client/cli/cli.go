@@ -88,9 +88,10 @@ func versionCmd(buildVersion, buildDate string) *cobra.Command {
 		Use:   "version",
 		Short: "print build version and date",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.Printf("Build version: %s\n", orNA(buildVersion))
-			cmd.Printf("Build date: %s\n", orNA(buildDate))
-			return nil
+			return writeLines(cmd.OutOrStdout(),
+				fmt.Sprintf("Build version: %s", orNA(buildVersion)),
+				fmt.Sprintf("Build date: %s", orNA(buildDate)),
+			)
 		},
 	}
 }
@@ -116,8 +117,7 @@ func registerCmd(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cmd.Printf("registered as %s\n", vault.Login())
-			return nil
+			return writeLines(cmd.OutOrStdout(), fmt.Sprintf("registered as %s", vault.Login()))
 		},
 	}
 	cmd.Flags().StringVarP(&login, "login", "l", "", "account login")
@@ -150,8 +150,13 @@ func loginCmd(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cmd.Printf("signed in as %s, pulled %d records\n", vault.Login(), result.Pulled)
-			return nil
+			if err := writeLines(cmd.OutOrStdout(),
+				fmt.Sprintf("signed in as %s, pulled %d records", vault.Login(), result.Pulled)); err != nil {
+				return err
+			}
+			// Конфликты бывают и при входе: локальная правка могла остаться
+			// неотправленной, и промолчать о ней значит потерять её для пользователя.
+			return printSyncResult(cmd, result)
 		},
 	}
 	cmd.Flags().StringVarP(&login, "login", "l", "", "account login")
@@ -298,16 +303,18 @@ func listCmd(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			w := cmd.OutOrStdout()
 			if len(secrets) == 0 {
-				cmd.Println("store is empty")
-				return nil
+				return writeLines(w, "store is empty")
 			}
 			for _, info := range secrets {
 				mark := ""
 				if info.Pending {
 					mark = " (not synchronized)"
 				}
-				cmd.Printf("%s  %-12s %s%s\n", info.ID, info.Kind, info.Name, mark)
+				if err := writeLines(w, fmt.Sprintf("%s  %-12s %s%s", info.ID, info.Kind, info.Name, mark)); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -354,8 +361,7 @@ func deleteCmd(opts *options) *cobra.Command {
 			if err := vault.Delete(args[0]); err != nil {
 				return err
 			}
-			cmd.Println("deleted locally, run sync to publish the change")
-			return nil
+			return writeLines(cmd.OutOrStdout(), "deleted locally, run sync to publish the change")
 		},
 	}
 }
@@ -381,21 +387,36 @@ func syncCmd(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cmd.Printf("pulled %d, pushed %d\n", result.Pulled, result.Pushed)
-			for _, conflict := range result.Conflicts {
-				cmd.Printf("conflict %s\n", conflict.ID)
-				cmd.Printf("  local:  %s\n", describe(conflict.Local))
-				cmd.Printf("  server: %s\n", describe(conflict.Remote))
+			if err := writeLines(cmd.OutOrStdout(),
+				fmt.Sprintf("pulled %d, pushed %d", result.Pulled, result.Pushed)); err != nil {
+				return err
 			}
-			if len(result.Conflicts) > 0 {
-				cmd.Println("run: gophkeeper sync --resolve local|remote --id <id>")
-			}
-			return nil
+			return printSyncResult(cmd, result)
 		},
 	}
 	cmd.Flags().StringVar(&resolve, "resolve", "", "resolve a conflict: local or remote")
 	cmd.Flags().StringVar(&id, "id", "", "secret to resolve")
 	return cmd
+}
+
+// printSyncResult показывает конфликты и способ их разрешения.
+func printSyncResult(cmd *cobra.Command, result app.SyncResult) error {
+	if len(result.Conflicts) == 0 {
+		return nil
+	}
+
+	w := cmd.OutOrStdout()
+	for _, conflict := range result.Conflicts {
+		err := writeLines(w,
+			fmt.Sprintf("conflict %s", conflict.ID),
+			fmt.Sprintf("  local:  %s", describe(conflict.Local)),
+			fmt.Sprintf("  server: %s", describe(conflict.Remote)),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return writeLines(w, "run: gophkeeper sync --resolve local|remote --id <id>")
 }
 
 func resolveConflict(cmd *cobra.Command, vault *app.Vault, resolve, id string) error {
@@ -407,16 +428,15 @@ func resolveConflict(cmd *cobra.Command, vault *app.Vault, resolve, id string) e
 		if err := vault.ResolveLocal(cmd.Context(), id); err != nil {
 			return err
 		}
-		cmd.Println("local version published")
+		return writeLines(cmd.OutOrStdout(), "local version published")
 	case "remote":
 		if err := vault.ResolveRemote(id); err != nil {
 			return err
 		}
-		cmd.Println("local version dropped")
+		return writeLines(cmd.OutOrStdout(), "local version dropped")
 	default:
 		return fmt.Errorf("unknown resolution %q, use local or remote", resolve)
 	}
-	return nil
 }
 
 func addSecret(cmd *cobra.Command, opts *options, secret *model.Secret) error {
@@ -430,8 +450,7 @@ func addSecret(cmd *cobra.Command, opts *options, secret *model.Secret) error {
 	if err != nil {
 		return err
 	}
-	cmd.Printf("%s\n", id)
-	return nil
+	return writeLines(cmd.OutOrStdout(), id)
 }
 
 // printSecret печатает расшифрованную запись. Ошибки записи здесь возвращаются,
@@ -618,7 +637,9 @@ func readMasterPassword(cmd *cobra.Command, confirm bool) (string, error) {
 		}
 	}
 
-	master := strings.TrimSpace(string(first))
+	// Пароль не обрезается: значение из окружения тоже берётся как есть, и
+	// обрезка пробелов развела бы ключи, выведенные из одного и того же пароля.
+	master := string(first)
 	if master == "" {
 		return "", errors.New("master password is empty")
 	}

@@ -202,6 +202,41 @@ func TestAddCard(t *testing.T) {
 	}
 }
 
+func TestMasterPasswordKeepsSpaces(t *testing.T) {
+	// Пароль с пробелами по краям не должен обрезаться: иначе ключ, выведенный
+	// из него в терминале, разошёлся бы с ключом из переменной окружения.
+	master := "  пароль с пробелами  "
+	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", master)
+
+	path := filepath.Join(t.TempDir(), "vault.db")
+	store, err := localstore.Open(path)
+	if err != nil {
+		t.Fatalf("localstore.Open: %v", err)
+	}
+	saltData, err := crypto.NewSalt()
+	if err != nil {
+		t.Fatalf("NewSalt: %v", err)
+	}
+	verifier, err := crypto.NewVerifier(crypto.DeriveDataKey(master, saltData), testLogin)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	err = store.SaveProfile(localstore.Profile{
+		Login: testLogin, SaltAuth: saltData, SaltData: saltData,
+		KDFVersion: crypto.KDFVersion, Verifier: verifier,
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := run(t, "--store", path, "list"); err != nil {
+		t.Fatalf("пароль с пробелами не открыл хранилище: %v", err)
+	}
+}
+
 func TestCommandsRequireProfile(t *testing.T) {
 	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", testMaster)
 	store := filepath.Join(t.TempDir(), "vault.db")
