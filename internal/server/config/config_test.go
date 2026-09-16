@@ -114,6 +114,27 @@ func TestConfigPathFromEnv(t *testing.T) {
 	}
 }
 
+func TestEmptyValueOverridesEarlierSource(t *testing.T) {
+	// Объявленная пустой переменная и пустой флаг — это «значения нет», а не
+	// «источник промолчал»: они должны перекрывать то, что пришло раньше.
+	path := writeConfig(t, `{
+		"database_uri": "postgres://file/keeper",
+		"jwt_secret": "file-secret",
+		"cert_file": "cert.pem",
+		"key_file": "key.pem"
+	}`)
+	t.Setenv("JWT_SECRET", "")
+
+	if _, err := Parse([]string{"-c", path}); !errors.Is(err, ErrNoJWTSecret) {
+		t.Fatalf("пустая переменная не перекрыла файл: %v", err)
+	}
+
+	t.Setenv("JWT_SECRET", "env-secret")
+	if _, err := Parse([]string{"-c", path, "-k", ""}); !errors.Is(err, ErrNoJWTSecret) {
+		t.Fatalf("пустой флаг не перекрыл окружение: %v", err)
+	}
+}
+
 func TestConfigFlagOverridesConfigEnv(t *testing.T) {
 	fromEnv := writeConfig(t, `{
 		"database_uri": "postgres://env-file/keeper",

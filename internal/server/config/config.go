@@ -10,8 +10,34 @@ import (
 )
 
 // Значения по умолчанию.
+const defaultAddress = ":3200"
+
+// Имена настроек. Одно и то же имя служит ключом в JSON-файле и внутренним
+// ключом источников, чтобы источники не расходились между собой.
 const (
-	defaultAddress = ":3200"
+	keyAddress  = "grpc_address"
+	keyDatabase = "database_uri"
+	keySecret   = "jwt_secret"
+	keyCert     = "cert_file"
+	keyKey      = "key_file"
+)
+
+// Соответствие флагов и переменных окружения именам настроек.
+var (
+	flagNames = map[string]string{
+		"a":    keyAddress,
+		"d":    keyDatabase,
+		"k":    keySecret,
+		"cert": keyCert,
+		"key":  keyKey,
+	}
+	envNames = map[string]string{
+		"GRPC_ADDRESS": keyAddress,
+		"DATABASE_URI": keyDatabase,
+		"JWT_SECRET":   keySecret,
+		"TLS_CERT":     keyCert,
+		"TLS_KEY":      keyKey,
+	}
 )
 
 // Config — настройки сервера.
@@ -44,26 +70,28 @@ var ErrNoJWTSecret = errors.New("jwt secret is not set")
 // Флаги приоритетнее окружения: флаг — это явное намерение того, кто запускает
 // процесс сейчас, а переменные приходят из среды (compose, systemd, CI) и должны
 // перекрываться без её правки.
+//
+// Источник считается задавшим настройку по факту её присутствия, а не по
+// непустому значению: объявленная пустой переменная и флаг с пустым значением
+// означают «значения нет» и должны перекрывать то, что пришло раньше.
 func Parse(args []string) (Config, error) {
 	fs := flag.NewFlagSet("gophkeeper-server", flag.ContinueOnError)
 
-	var (
-		configPath  = fs.String("c", "", "path to JSON config file")
-		address     = fs.String("a", "", "gRPC server address")
-		databaseURI = fs.String("d", "", "PostgreSQL connection string")
-		jwtSecret   = fs.String("k", "", "secret for signing access tokens")
-		certFile    = fs.String("cert", "", "path to TLS certificate")
-		keyFile     = fs.String("key", "", "path to TLS private key")
-	)
+	configPath := fs.String("c", "", "path to JSON config file")
+	fs.String("a", "", "gRPC server address")
+	fs.String("d", "", "PostgreSQL connection string")
+	fs.String("k", "", "secret for signing access tokens")
+	fs.String("cert", "", "path to TLS certificate")
+	fs.String("key", "", "path to TLS private key")
+
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
-	// Путь к файлу подчиняется тому же правилу, что и остальные настройки:
-	// явный флаг сильнее переменной окружения.
+	// Путь к файлу подчиняется тому же правилу: явный флаг сильнее переменной.
 	path := *configPath
 	if path == "" {
-		path = env("CONFIG")
+		path = os.Getenv("CONFIG")
 	}
 
 	cfg := Config{Address: defaultAddress}
@@ -72,37 +100,16 @@ func Parse(args []string) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-		cfg = merge(cfg, fromFile)
+		cfg = fromFile
+		if cfg.Address == "" {
+			cfg.Address = defaultAddress
+		}
 	}
 
-	cfg = merge(cfg, Config{
-		Address:     env("GRPC_ADDRESS"),
-		DatabaseURI: env("DATABASE_URI"),
-		JWTSecret:   env("JWT_SECRET"),
-		CertFile:    env("TLS_CERT"),
-		KeyFile:     env("TLS_KEY"),
-	})
-
-	cfg = merge(cfg, Config{
-		Address:     *address,
-		DatabaseURI: *databaseURI,
-		JWTSecret:   *jwtSecret,
-		CertFile:    *certFile,
-		KeyFile:     *keyFile,
-	})
+	cfg = apply(cfg, environment())
+	cfg = apply(cfg, flags(fs))
 
 	return cfg, cfg.validate()
-}
-
-// env читает переменную окружения. LookupEnv отличает пустое значение от
-// незаданного: объявленная пустой переменная означает «значения нет», и
-// подставлять вместо неё дефолт было бы неверно.
-func env(name string) string {
-	value, ok := os.LookupEnv(name)
-	if !ok {
-		return ""
-	}
-	return value
 }
 
 func (c Config) validate() error {
@@ -118,6 +125,50 @@ func (c Config) validate() error {
 	return nil
 }
 
+// environment собирает объявленные переменные окружения. LookupEnv отличает
+// пустое значение от незаданного, поэтому пустая переменная тоже считается
+// заданной и перекрывает файл.
+func environment() map[string]string {
+	values := make(map[string]string, len(envNames))
+	for name, key := range envNames {
+		if value, ok := os.LookupEnv(name); ok {
+			values[key] = value
+		}
+	}
+	return values
+}
+
+// flags собирает только те флаги, которые указаны в командной строке: Visit
+// обходит заданные, а не все объявленные.
+func flags(fs *flag.FlagSet) map[string]string {
+	values := make(map[string]string, len(flagNames))
+	fs.Visit(func(f *flag.Flag) {
+		if key, ok := flagNames[f.Name]; ok {
+			values[key] = f.Value.String()
+		}
+	})
+	return values
+}
+
+func apply(cfg Config, values map[string]string) Config {
+	if value, ok := values[keyAddress]; ok {
+		cfg.Address = value
+	}
+	if value, ok := values[keyDatabase]; ok {
+		cfg.DatabaseURI = value
+	}
+	if value, ok := values[keySecret]; ok {
+		cfg.JWTSecret = value
+	}
+	if value, ok := values[keyCert]; ok {
+		cfg.CertFile = value
+	}
+	if value, ok := values[keyKey]; ok {
+		cfg.KeyFile = value
+	}
+	return cfg
+}
+
 func readFile(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -128,24 +179,4 @@ func readFile(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config file: %w", err)
 	}
 	return cfg, nil
-}
-
-// merge накладывает непустые поля next поверх base.
-func merge(base, next Config) Config {
-	if next.Address != "" {
-		base.Address = next.Address
-	}
-	if next.DatabaseURI != "" {
-		base.DatabaseURI = next.DatabaseURI
-	}
-	if next.JWTSecret != "" {
-		base.JWTSecret = next.JWTSecret
-	}
-	if next.CertFile != "" {
-		base.CertFile = next.CertFile
-	}
-	if next.KeyFile != "" {
-		base.KeyFile = next.KeyFile
-	}
-	return base
 }
