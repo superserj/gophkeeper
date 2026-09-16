@@ -610,7 +610,12 @@ func closeAll(store *localstore.Store, client *remote.Client) {
 // readMasterPassword спрашивает мастер-пароль без эха. Значение никуда не
 // сохраняется: из него выводится ключ, который живёт только в памяти процесса.
 func readMasterPassword(cmd *cobra.Command, confirm bool) (string, error) {
-	if value := os.Getenv(masterPasswordEnv); value != "" {
+	// Объявленная переменная — это осознанный выбор пользователя, в том числе
+	// когда она пуста: спрашивать пароль заново в этом случае неправильно.
+	if value, ok := os.LookupEnv(masterPasswordEnv); ok {
+		if value == "" {
+			return "", fmt.Errorf("%s is set to an empty value", masterPasswordEnv)
+		}
 		return value, nil
 	}
 

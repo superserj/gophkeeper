@@ -335,6 +335,8 @@ func TestAddRejectsMissingFile(t *testing.T) {
 }
 
 func TestMasterPasswordIsRequired(t *testing.T) {
+	// Переменная объявлена пустой: это осознанно заданное пустое значение,
+	// и команда должна сказать об этом, а не молча спросить пароль заново.
 	t.Setenv("GOPHKEEPER_MASTER_PASSWORD", "")
 	store := prepareStore(t)
 
@@ -343,6 +345,6 @@ func TestMasterPasswordIsRequired(t *testing.T) {
 		t.Fatal("команда сработала без мастер-пароля")
 	}
 	if !strings.Contains(err.Error(), "GOPHKEEPER_MASTER_PASSWORD") {
-		t.Fatalf("ошибка не подсказывает, как передать пароль: %v", err)
+		t.Fatalf("ошибка не называет переменную с паролем: %v", err)
 	}
 }

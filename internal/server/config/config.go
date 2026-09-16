@@ -77,7 +77,7 @@ var ErrNoJWTSecret = errors.New("jwt secret is not set")
 func Parse(args []string) (Config, error) {
 	fs := flag.NewFlagSet("gophkeeper-server", flag.ContinueOnError)
 
-	configPath := fs.String("c", "", "path to JSON config file")
+	fs.String("c", "", "path to JSON config file")
 	fs.String("a", "", "gRPC server address")
 	fs.String("d", "", "PostgreSQL connection string")
 	fs.String("k", "", "secret for signing access tokens")
@@ -88,9 +88,10 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 
-	// Путь к файлу подчиняется тому же правилу: явный флаг сильнее переменной.
-	path := *configPath
-	if path == "" {
+	// Путь к файлу подчиняется тому же правилу: явный флаг сильнее переменной,
+	// причём пустой -c означает «файла нет» и отключает чтение CONFIG.
+	path, ok := configPath(fs)
+	if !ok {
 		path = os.Getenv("CONFIG")
 	}
 
@@ -123,6 +124,20 @@ func (c Config) validate() error {
 		return ErrNoTLS
 	}
 	return nil
+}
+
+// configPath возвращает значение флага -c и признак того, что флаг задан.
+func configPath(fs *flag.FlagSet) (string, bool) {
+	var (
+		path  string
+		given bool
+	)
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "c" {
+			path, given = f.Value.String(), true
+		}
+	})
+	return path, given
 }
 
 // environment собирает объявленные переменные окружения. LookupEnv отличает

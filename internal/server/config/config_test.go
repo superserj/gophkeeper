@@ -159,6 +159,21 @@ func TestConfigFlagOverridesConfigEnv(t *testing.T) {
 	}
 }
 
+func TestEmptyConfigFlagDisablesConfigEnv(t *testing.T) {
+	path := writeConfig(t, `{
+		"database_uri": "postgres://file/keeper",
+		"jwt_secret": "file-secret",
+		"cert_file": "cert.pem",
+		"key_file": "key.pem"
+	}`)
+	t.Setenv("CONFIG", path)
+
+	// Пустой -c означает «файл не читать», иначе отключить его флагом нельзя.
+	if _, err := Parse([]string{"-c", ""}); !errors.Is(err, ErrNoDatabase) {
+		t.Fatalf("пустой -c не отключил файл из CONFIG: %v", err)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	tests := []struct {
 		name string
