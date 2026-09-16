@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -82,29 +83,41 @@ func run(logger *zap.Logger) error {
 		return err
 	}
 
-	errs := make(chan error, 1)
-	go func() {
+	group, groupCtx := errgroup.WithContext(ctx)
+
+	group.Go(func() error {
 		logger.Info("grpc server started", zap.String("address", cfg.Address))
-		errs <- server.Serve(listener)
+		return server.Serve(listener)
+	})
+
+	// Останавливаемся по сигналу или по ошибке из Serve: errgroup отменяет
+	// groupCtx в обоих случаях, поэтому отдельного канала для этого не нужно.
+	group.Go(func() error {
+		<-groupCtx.Done()
+		logger.Info("shutting down")
+		shutdown(server, logger)
+		return nil
+	})
+
+	if err := group.Wait(); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		return err
+	}
+	return nil
+}
+
+// shutdown завершает обслуживание, но не ждёт дольше shutdownTimeout: клиент,
+// не закрывший поток Upload, иначе держал бы сервер бесконечно.
+func shutdown(server *grpc.Server, logger *zap.Logger) {
+	stopped := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(stopped)
 	}()
 
 	select {
-	case err := <-errs:
-		return err
-	case <-ctx.Done():
-		logger.Info("shutting down")
-		stopped := make(chan struct{})
-		go func() {
-			server.GracefulStop()
-			close(stopped)
-		}()
-
-		select {
-		case <-stopped:
-		case <-time.After(shutdownTimeout):
-			logger.Warn("graceful shutdown timed out, stopping now")
-			server.Stop()
-		}
-		return nil
+	case <-stopped:
+	case <-time.After(shutdownTimeout):
+		logger.Warn("graceful shutdown timed out, stopping now")
+		server.Stop()
 	}
 }
