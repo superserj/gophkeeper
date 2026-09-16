@@ -1,0 +1,129 @@
+// Команда gophkeeper-server поднимает gRPC-сервер GophKeeper.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+
+	"github.com/superserj/gophkeeper/internal/server/auth"
+	"github.com/superserj/gophkeeper/internal/server/config"
+	"github.com/superserj/gophkeeper/internal/server/grpcapi"
+	"github.com/superserj/gophkeeper/internal/server/service"
+	"github.com/superserj/gophkeeper/internal/server/storage"
+	"github.com/superserj/gophkeeper/internal/transport"
+	pb "github.com/superserj/gophkeeper/proto/gophkeeper/v1"
+)
+
+// shutdownTimeout ограничивает ожидание завершения запросов при остановке:
+// незакрытый клиентом поток Upload иначе держал бы сервер бесконечно.
+const shutdownTimeout = 30 * time.Second
+
+func main() {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic(err)
+	}
+
+	runErr := run(logger)
+	if runErr != nil {
+		logger.Error("server stopped", zap.Error(runErr))
+	}
+
+	// Fatal вызвал бы os.Exit в обход отложенных вызовов, и последние записи
+	// остались бы в буфере логгера, поэтому выход из процесса ровно один и
+	// делается уже после сброса буфера.
+	_ = logger.Sync()
+	if runErr != nil {
+		os.Exit(1)
+	}
+}
+
+func run(logger *zap.Logger) error {
+	cfg, err := config.Parse(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+
+	store, err := storage.New(ctx, cfg.DatabaseURI)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	tokens := auth.NewTokenManager(cfg.JWTSecret, auth.TokenTTL)
+	svc := service.New(store, tokens)
+
+	creds, err := credentials.NewServerTLSFromFile(cfg.CertFile, cfg.KeyFile)
+	if err != nil {
+		return err
+	}
+
+	opts := append(transport.ServerOptions(),
+		grpc.Creds(creds),
+		grpc.UnaryInterceptor(grpcapi.UnaryAuthInterceptor(tokens)),
+		grpc.StreamInterceptor(grpcapi.StreamAuthInterceptor(tokens)),
+	)
+	server := grpc.NewServer(opts...)
+	pb.RegisterAuthServiceServer(server, grpcapi.NewAuthService(svc, logger))
+	pb.RegisterVaultServiceServer(server, grpcapi.NewVaultService(svc, logger))
+
+	listener, err := net.Listen("tcp", cfg.Address)
+	if err != nil {
+		return err
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+
+	group.Go(func() error {
+		logger.Info("grpc server started", zap.String("address", cfg.Address))
+		return server.Serve(listener)
+	})
+
+	// Останавливаемся по сигналу или по ошибке из Serve: errgroup отменяет
+	// groupCtx в обоих случаях, поэтому отдельного канала для этого не нужно.
+	group.Go(func() error {
+		<-groupCtx.Done()
+		logger.Info("shutting down")
+		shutdown(server, logger)
+		return nil
+	})
+
+	if err := group.Wait(); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		return err
+	}
+	return nil
+}
+
+// shutdown завершает обслуживание, но не ждёт дольше shutdownTimeout: клиент,
+// не закрывший поток Upload, иначе держал бы сервер бесконечно.
+func shutdown(server *grpc.Server, logger *zap.Logger) {
+	stopped := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(shutdownTimeout):
+		logger.Warn("graceful shutdown timed out, stopping now")
+		server.Stop()
+	}
+}
