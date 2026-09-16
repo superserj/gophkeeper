@@ -1,7 +1,6 @@
 package storage_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"testing"
@@ -24,7 +23,7 @@ func newStorage(t *testing.T) *storage.Storage {
 		t.Skipf("переменная %s не задана", testDSNEnv)
 	}
 
-	store, err := storage.New(context.Background(), dsn)
+	store, err := storage.New(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("storage.New: %v", err)
 	}
@@ -35,7 +34,7 @@ func newStorage(t *testing.T) *storage.Storage {
 func newUser(t *testing.T, store *storage.Storage, login string) int64 {
 	t.Helper()
 
-	id, err := store.CreateUser(context.Background(), storage.User{
+	id, err := store.CreateUser(t.Context(), storage.User{
 		Login:        login,
 		PasswordHash: "argon2id$hash",
 		SaltAuth:     []byte("salt-auth"),
@@ -50,7 +49,7 @@ func newUser(t *testing.T, store *storage.Storage, login string) int64 {
 }
 
 func TestCreateUserAndGet(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	login := uniqueLogin(t)
 
@@ -81,7 +80,7 @@ func TestCreateUserAndGet(t *testing.T) {
 }
 
 func TestSaveSecretAssignsRevisions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 
@@ -99,7 +98,7 @@ func TestSaveSecretAssignsRevisions(t *testing.T) {
 }
 
 func TestSaveSecretDetectsConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 	id := newUUID(t)
@@ -128,7 +127,7 @@ func TestSaveSecretDetectsConflict(t *testing.T) {
 }
 
 func TestEachSecretSinceOrdersByRevision(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 
@@ -160,7 +159,7 @@ func TestEachSecretSinceOrdersByRevision(t *testing.T) {
 }
 
 func TestEachSecretSinceStopsOnError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 
@@ -176,7 +175,7 @@ func TestEachSecretSinceStopsOnError(t *testing.T) {
 }
 
 func TestGetSecret(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 	id := newUUID(t)
@@ -198,7 +197,7 @@ func TestGetSecret(t *testing.T) {
 }
 
 func TestDeleteStoresTombstone(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 	id := newUUID(t)
@@ -222,7 +221,7 @@ func TestDeleteStoresTombstone(t *testing.T) {
 }
 
 func TestSecretsAreIsolatedBetweenUsers(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 	first := newUser(t, store, uniqueLogin(t))
 	second := newUser(t, store, uniqueLogin(t))
@@ -246,7 +245,7 @@ func TestSecretsAreIsolatedBetweenUsers(t *testing.T) {
 }
 
 func TestSaveSecretRejectsUnknownUser(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newStorage(t)
 
 	if _, err := store.SaveSecret(ctx, -1, model.SecretRecord{ID: newUUID(t)}, 0); !errors.Is(err, storage.ErrUserNotFound) {
@@ -258,7 +257,7 @@ func TestNewReportsBadDSN(t *testing.T) {
 	if os.Getenv(testDSNEnv) == "" {
 		t.Skipf("переменная %s не задана", testDSNEnv)
 	}
-	if _, err := storage.New(context.Background(), "postgres://absent:5432/none"); err == nil {
+	if _, err := storage.New(t.Context(), "postgres://absent:5432/none"); err == nil {
 		t.Fatal("хранилище открылось с нерабочим DSN")
 	}
 }

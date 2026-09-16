@@ -2,7 +2,6 @@ package cli_test
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +69,7 @@ func runWithInput(t *testing.T, input string, args ...string) (string, error) {
 	t.Helper()
 
 	var out bytes.Buffer
-	err := cli.Run(context.Background(), args, strings.NewReader(input), &out, "v1.0.0", "2026-09-17")
+	err := cli.Run(t.Context(), args, strings.NewReader(input), &out, "v1.0.0", "2026-09-17")
 	return out.String(), err
 }
 

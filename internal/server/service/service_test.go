@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -49,7 +48,7 @@ func credentials(t *testing.T, login string) service.Credentials {
 }
 
 func TestRegisterAndLogin(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	creds := credentials(t, testLogin)
 
@@ -74,7 +73,7 @@ func TestRegisterAndLogin(t *testing.T) {
 }
 
 func TestRegisterRejectsDuplicateLogin(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 
 	if _, err := svc.Register(ctx, credentials(t, testLogin)); err != nil {
@@ -86,7 +85,7 @@ func TestRegisterRejectsDuplicateLogin(t *testing.T) {
 }
 
 func TestRegisterValidatesInput(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	valid := credentials(t, testLogin)
 
@@ -150,7 +149,7 @@ func TestRegisterValidatesInput(t *testing.T) {
 }
 
 func TestLoginRejectsWrongKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 
 	if _, err := svc.Register(ctx, credentials(t, testLogin)); err != nil {
@@ -168,7 +167,7 @@ func TestLoginRejectsWrongKey(t *testing.T) {
 }
 
 func TestSaltsHidesUnknownLogin(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	creds := credentials(t, testLogin)
 
@@ -189,7 +188,7 @@ func TestSaltsHidesUnknownLogin(t *testing.T) {
 }
 
 func TestPushAssignsGrowingRevisions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
@@ -207,7 +206,7 @@ func TestPushAssignsGrowingRevisions(t *testing.T) {
 }
 
 func TestPushDetectsConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
@@ -230,7 +229,7 @@ func TestPushDetectsConflict(t *testing.T) {
 }
 
 func TestPushRejectsHugePayloadAndEmptyID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
@@ -244,7 +243,7 @@ func TestPushRejectsHugePayloadAndEmptyID(t *testing.T) {
 }
 
 func TestPullReturnsChangesInOrder(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
@@ -271,7 +270,7 @@ func TestPullReturnsChangesInOrder(t *testing.T) {
 }
 
 func TestPullStopsOnError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
@@ -286,7 +285,7 @@ func TestPullStopsOnError(t *testing.T) {
 }
 
 func TestGetHidesDeletedSecret(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
@@ -312,7 +311,7 @@ func TestGetHidesDeletedSecret(t *testing.T) {
 func register(t *testing.T, svc *service.Service) int64 {
 	t.Helper()
 
-	if _, err := svc.Register(context.Background(), credentials(t, testLogin)); err != nil {
+	if _, err := svc.Register(t.Context(), credentials(t, testLogin)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return 1

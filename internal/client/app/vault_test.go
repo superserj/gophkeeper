@@ -96,7 +96,7 @@ func credentialsSecret(name, login, password string) *model.Secret {
 }
 
 func TestRegisterAddAndSync(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -135,7 +135,7 @@ func TestRegisterAddAndSync(t *testing.T) {
 }
 
 func TestSecondClientSeesSecrets(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	first, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -171,7 +171,7 @@ func TestSecondClientSeesSecrets(t *testing.T) {
 }
 
 func TestOfflineEditSurvivesPull(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	firstStore, secondStore := newStore(t), newStore(t)
@@ -233,7 +233,7 @@ func TestOfflineEditSurvivesPull(t *testing.T) {
 }
 
 func TestResolveLocalPublishesOwnVersion(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 	id, second, third := conflictingClients(t, listener)
 
@@ -274,7 +274,7 @@ func TestResolveRemoteDropsLocalVersion(t *testing.T) {
 // возвращает её идентификатор, конфликтующего клиента и ещё один чистый клиент.
 func conflictingClients(t *testing.T, listener *bufconn.Listener) (string, *app.Vault, *app.Vault) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
 	if err != nil {
@@ -317,7 +317,7 @@ func conflictingClients(t *testing.T, listener *bufconn.Listener) (string, *app.
 }
 
 func TestDeleteHidesSecretEverywhere(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	first, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -359,7 +359,7 @@ func TestDeleteHidesSecretEverywhere(t *testing.T) {
 }
 
 func TestBinarySecretGoesThroughUpload(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -397,7 +397,7 @@ func TestBinarySecretGoesThroughUpload(t *testing.T) {
 }
 
 func TestUnlockChecksMasterPassword(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 	store := newStore(t)
 
@@ -414,7 +414,7 @@ func TestUnlockChecksMasterPassword(t *testing.T) {
 }
 
 func TestStoreBelongsToSingleAccount(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 	store := newStore(t)
 
@@ -446,7 +446,7 @@ func TestUnlockWithoutProfile(t *testing.T) {
 }
 
 func TestLoginRejectsWrongPassword(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	if _, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster); err != nil {
@@ -459,7 +459,7 @@ func TestLoginRejectsWrongPassword(t *testing.T) {
 }
 
 func TestRegisterRejectsTakenLogin(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	if _, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster); err != nil {
@@ -472,7 +472,7 @@ func TestRegisterRejectsTakenLogin(t *testing.T) {
 }
 
 func TestUpdateAndDeleteRequireExistingSecret(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -492,7 +492,7 @@ func TestUpdateAndDeleteRequireExistingSecret(t *testing.T) {
 }
 
 func TestAddRejectsInvalidSecret(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -505,7 +505,7 @@ func TestAddRejectsInvalidSecret(t *testing.T) {
 }
 
 func TestSecretLargerThanLimitIsRejected(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -533,7 +533,7 @@ func TestSecretLargerThanLimitIsRejected(t *testing.T) {
 }
 
 func TestVaultLogin(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 
 	vault, err := app.Register(ctx, newClient(t, listener), newStore(t), testLogin, testMaster)
@@ -546,7 +546,7 @@ func TestVaultLogin(t *testing.T) {
 }
 
 func TestVaultRequiresToken(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	listener := startServer(t)
 	store := newStore(t)
 

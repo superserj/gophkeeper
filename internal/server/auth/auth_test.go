@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestHashAndVerify(t *testing.T) {
@@ -86,13 +88,19 @@ func TestParseRejectsForeignSecret(t *testing.T) {
 }
 
 func TestParseRejectsExpiredToken(t *testing.T) {
-	manager := NewTokenManager("secret", time.Nanosecond)
+	manager := NewTokenManager("secret", TokenTTL)
 
-	token, err := manager.Issue(1)
+	// Токен со сроком в прошлом подписан тем же секретом: ждать его истечения
+	// не нужно, а ожидание в тесте зависело бы от точности системного таймера.
+	expired := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Subject:   "1",
+		IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
+	})
+	token, err := expired.SignedString([]byte("secret"))
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("SignedString: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
 
 	if _, err := manager.Parse(token); !errors.Is(err, ErrBadToken) {
 		t.Fatalf("просроченный токен дал %v, ожидалась ErrBadToken", err)
