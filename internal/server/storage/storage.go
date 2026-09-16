@@ -32,6 +32,9 @@ var (
 
 const uniqueViolation = "23505"
 
+// pullPageSize — сколько изменений читается из базы за один запрос.
+const pullPageSize = 100
+
 // User — профиль пользователя. Пароль и ключ шифрования сервер не хранит:
 // password_hash считается от authKey, а verifier расшифровывается только клиентом.
 type User struct {
@@ -125,26 +128,52 @@ func (s *Storage) GetSecret(ctx context.Context, userID int64, id string) (model
 // EachSecretSince передаёт в fn все изменения пользователя с ревизией больше since
 // строго по возрастанию ревизии: клиент сохраняет курсор вместе с каждым изменением,
 // поэтому обрыв связи не должен приводить к пропуску более старой записи.
+//
+// Изменения читаются страницами, и соединение возвращается в пул до вызова fn:
+// иначе клиент, перестающий читать поток, держал бы соединение всё это время и
+// несколько таких клиентов исчерпали бы пул.
 func (s *Storage) EachSecretSince(ctx context.Context, userID, since int64, fn func(model.SecretRecord) error) error {
-	const query = `SELECT id, payload, deleted, revision, updated_at
-		FROM secrets WHERE user_id = $1 AND revision > $2 ORDER BY revision`
+	for {
+		page, err := s.secretsPage(ctx, userID, since)
+		if err != nil {
+			return err
+		}
 
-	rows, err := s.pool.Query(ctx, query, userID, since)
+		for _, rec := range page {
+			if err := fn(rec); err != nil {
+				return err
+			}
+			since = rec.Revision
+		}
+		if len(page) < pullPageSize {
+			return nil
+		}
+	}
+}
+
+// secretsPage читает очередную страницу изменений и закрывает запрос до возврата.
+func (s *Storage) secretsPage(ctx context.Context, userID, since int64) ([]model.SecretRecord, error) {
+	const query = `SELECT id, payload, deleted, revision, updated_at
+		FROM secrets WHERE user_id = $1 AND revision > $2 ORDER BY revision LIMIT $3`
+
+	rows, err := s.pool.Query(ctx, query, userID, since, pullPageSize)
 	if err != nil {
-		return fmt.Errorf("select changes: %w", err)
+		return nil, fmt.Errorf("select changes: %w", err)
 	}
 	defer rows.Close()
 
+	page := make([]model.SecretRecord, 0, pullPageSize)
 	for rows.Next() {
 		var rec model.SecretRecord
 		if err := rows.Scan(&rec.ID, &rec.Payload, &rec.Deleted, &rec.Revision, &rec.UpdatedAt); err != nil {
-			return fmt.Errorf("scan change: %w", err)
+			return nil, fmt.Errorf("scan change: %w", err)
 		}
-		if err := fn(rec); err != nil {
-			return err
-		}
+		page = append(page, rec)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read changes: %w", err)
+	}
+	return page, nil
 }
 
 // SaveSecret записывает шифротекст поверх версии baseRevision и возвращает новую ревизию.
