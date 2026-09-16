@@ -193,19 +193,29 @@ func addCredentialsCmd(opts *options) *cobra.Command {
 }
 
 func addTextCmd(opts *options) *cobra.Command {
-	var name, meta, text, file string
+	var name, meta, file string
 
 	cmd := &cobra.Command{
 		Use:   "text",
 		Short: "add arbitrary text",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Текст — такой же секрет, как пароль, и флагом не принимается:
+			// аргументы видны в списке процессов и остаются в истории оболочки.
+			var text string
 			if file != "" {
 				data, err := os.ReadFile(file)
 				if err != nil {
 					return fmt.Errorf("read text file: %w", err)
 				}
 				text = string(data)
+			} else {
+				value, err := readSecretValue(cmd, opts, "text: ")
+				if err != nil {
+					return err
+				}
+				text = value
 			}
+
 			return addSecret(cmd, opts, &model.Secret{
 				Kind: model.KindText,
 				Name: name,
@@ -215,7 +225,6 @@ func addTextCmd(opts *options) *cobra.Command {
 		},
 	}
 	bindNameMeta(cmd, &name, &meta)
-	cmd.Flags().StringVar(&text, "text", "", "text to store")
 	cmd.Flags().StringVar(&file, "file", "", "read text from file")
 	return cmd
 }
@@ -425,30 +434,57 @@ func addSecret(cmd *cobra.Command, opts *options, secret *model.Secret) error {
 	return nil
 }
 
+// printSecret печатает расшифрованную запись. Ошибки записи здесь возвращаются,
+// а не проглатываются: иначе при переполненном диске или оборванном выводе
+// команда сообщила бы об успехе, показав пользователю неполные данные.
 func printSecret(cmd *cobra.Command, secret *model.Secret, out string) error {
-	cmd.Printf("name: %s\n", secret.Name)
-	cmd.Printf("kind: %s\n", secret.Kind)
+	w := cmd.OutOrStdout()
+
+	if err := writeLines(w,
+		fmt.Sprintf("name: %s", secret.Name),
+		fmt.Sprintf("kind: %s", secret.Kind),
+	); err != nil {
+		return err
+	}
 	if secret.Meta != "" {
-		cmd.Printf("meta: %s\n", secret.Meta)
+		if err := writeLines(w, fmt.Sprintf("meta: %s", secret.Meta)); err != nil {
+			return err
+		}
 	}
 
 	switch secret.Kind {
 	case model.KindCredentials:
-		cmd.Printf("login: %s\npassword: %s\n", secret.Credentials.Login, secret.Credentials.Password)
+		return writeLines(w,
+			fmt.Sprintf("login: %s", secret.Credentials.Login),
+			fmt.Sprintf("password: %s", secret.Credentials.Password),
+		)
 	case model.KindText:
-		cmd.Printf("text: %s\n", secret.Text)
+		return writeLines(w, fmt.Sprintf("text: %s", secret.Text))
 	case model.KindCard:
-		cmd.Printf("number: %s\nholder: %s\nexpires: %s\ncvv: %s\n",
-			secret.Card.Number, secret.Card.Holder, secret.Card.Expires, secret.Card.CVV)
+		return writeLines(w,
+			fmt.Sprintf("number: %s", secret.Card.Number),
+			fmt.Sprintf("holder: %s", secret.Card.Holder),
+			fmt.Sprintf("expires: %s", secret.Card.Expires),
+			fmt.Sprintf("cvv: %s", secret.Card.CVV),
+		)
 	case model.KindBinary:
 		if out == "" {
-			cmd.Printf("binary: %d bytes, use --out to save\n", len(secret.Binary))
-			return nil
+			return writeLines(w, fmt.Sprintf("binary: %d bytes, use --out to save", len(secret.Binary)))
 		}
 		if err := writeSecretFile(out, secret.Binary); err != nil {
 			return err
 		}
-		cmd.Printf("binary written to %s\n", out)
+		return writeLines(w, fmt.Sprintf("binary written to %s", out))
+	}
+	return nil
+}
+
+// writeLines пишет строки и сообщает о первой же ошибке вывода.
+func writeLines(w io.Writer, lines ...string) error {
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	}
 	return nil
 }

@@ -113,7 +113,7 @@ gophkeeper version
 gophkeeper register -l user -a 127.0.0.1:3200 --cacert server.crt
 gophkeeper login -l user
 gophkeeper add credentials --name bank --login user --meta "интернет-банк"
-gophkeeper add text --name note --file note.txt
+gophkeeper add text --name note --file note.txt   # без --file текст вводится с клавиатуры
 gophkeeper add binary --name archive --file archive.zip
 gophkeeper add card --name visa --holder "IVAN IVANOV" --expires 12/29
 gophkeeper list
@@ -125,9 +125,10 @@ gophkeeper sync
 Мастер-пароль запрашивается без эха. Для скриптов его можно передать переменной
 `GOPHKEEPER_MASTER_PASSWORD`.
 
-Сам пароль записи, номер карты и код проверки тоже вводятся без эха и не имеют
-флагов: аргументы командной строки видны в списке процессов и остаются в истории
-оболочки. В скриптах их подают на стандартный ввод по строке на значение.
+Сами секретные значения — пароль записи, текст заметки, номер карты и код проверки —
+тоже вводятся без эха и не имеют флагов: аргументы командной строки видны в списке
+процессов и остаются в истории оболочки. В скриптах их подают на стандартный ввод
+по строке на значение, а текст и бинарные данные можно прочитать из файла (`--file`).
 
 Локальное хранилище — файл `~/.gophkeeper/vault.db` с правами `0600`; путь меняется
 флагом `--store`. Записи лежат в нём зашифрованными, поэтому список и просмотр

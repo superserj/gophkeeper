@@ -144,11 +144,28 @@ func TestAddTextFromFileAndBinary(t *testing.T) {
 		t.Fatalf("add text: %v", err)
 	}
 
+	// Без файла текст читается из ввода, а не из флага.
+	textID, err := runWithInput(t, "секрет из ввода\n", "--store", store, "add", "text", "--name", "typed")
+	if err != nil {
+		t.Fatalf("add text из ввода: %v", err)
+	}
+	shown, err := run(t, "--store", store, "get", strings.TrimSpace(textID))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !strings.Contains(shown, "text: секрет из ввода") {
+		t.Fatalf("вывод текста: %q", shown)
+	}
+
 	output, err := run(t, "--store", store, "add", "binary", "--name", "blob", "--file", binaryPath)
 	if err != nil {
 		t.Fatalf("add binary: %v", err)
 	}
 	binaryID := strings.TrimSpace(output)
+	source, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
 
 	outPath := filepath.Join(dir, "restored.bin")
 	if _, err := run(t, "--store", store, "get", binaryID, "--out", outPath); err != nil {
@@ -159,8 +176,8 @@ func TestAddTextFromFileAndBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read restored: %v", err)
 	}
-	if len(restored) != 4 || restored[3] != 3 {
-		t.Fatalf("восстановлено %v", restored)
+	if !bytes.Equal(restored, source) {
+		t.Fatalf("восстановлено %v, ожидалось %v", restored, source)
 	}
 }
 
