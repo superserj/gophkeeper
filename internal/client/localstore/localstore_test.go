@@ -69,6 +69,27 @@ func TestTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveSessionStoresProfileAndToken(t *testing.T) {
+	store := openStore(t)
+
+	profile := Profile{Login: "user", SaltAuth: []byte{1}, SaltData: []byte{2}, KDFVersion: 1, Verifier: []byte{3}}
+	if err := store.SaveSession(profile, "jwt"); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	saved, err := store.Profile()
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	token, err := store.Token()
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if saved.Login != profile.Login || token != "jwt" {
+		t.Fatalf("сохранено %+v и токен %q", saved, token)
+	}
+}
+
 func TestApplyChangeMovesCursor(t *testing.T) {
 	store := openStore(t)
 

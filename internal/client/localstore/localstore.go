@@ -137,6 +137,24 @@ func (s *Store) SaveProfile(p Profile) error {
 	})
 }
 
+// SaveSession сохраняет профиль и токен одной транзакцией: профиль без токена
+// оставил бы клиента в состоянии, из которого нельзя ни синхронизироваться, ни
+// понять, что вход не завершился.
+func (s *Store) SaveSession(p Profile, token string) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal profile: %w", err)
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		if err := meta.Put(keyProfile, data); err != nil {
+			return fmt.Errorf("put profile: %w", err)
+		}
+		return meta.Put(keyToken, []byte(token))
+	})
+}
+
 // Profile возвращает сохранённый профиль.
 func (s *Store) Profile() (Profile, error) {
 	var p Profile

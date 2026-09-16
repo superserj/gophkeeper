@@ -174,17 +174,14 @@ func saveSession(client Server, store *localstore.Store, login, master string, s
 		return nil, ErrForeignStore
 	}
 
-	err := store.SaveProfile(localstore.Profile{
+	err := store.SaveSession(localstore.Profile{
 		Login:      login,
 		SaltAuth:   session.SaltAuth,
 		SaltData:   session.SaltData,
 		KDFVersion: session.KDFVersion,
 		Verifier:   session.Verifier,
-	})
+	}, session.Token)
 	if err != nil {
-		return nil, err
-	}
-	if err := store.SaveToken(session.Token); err != nil {
 		return nil, err
 	}
 	client.SetToken(session.Token)
