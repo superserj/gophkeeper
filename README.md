@@ -108,10 +108,14 @@ createdb gophkeeper
 Сборка под текущую платформу — `make build`, под все поддерживаемые —
 `make build-all` (Linux, macOS, Windows; amd64 и arm64).
 
+Флаги `-a` (адрес сервера) и `--cacert` (сертификат, которым подписан сертификат
+сервера) нужны каждой команде, которая ходит на сервер: они нигде не сохраняются.
+С самоподписанным сертификатом из `make cert` без `--cacert` проверка не пройдёт.
+
 ```
 gophkeeper version
-gophkeeper register -l user -a 127.0.0.1:3200 --cacert server.crt
-gophkeeper login -l user
+gophkeeper -a 127.0.0.1:3200 --cacert server.crt register -l user
+gophkeeper -a 127.0.0.1:3200 --cacert server.crt login -l user
 gophkeeper add credentials --name bank --login user --meta "интернет-банк"
 gophkeeper add text --name note --file note.txt   # без --file текст вводится с клавиатуры
 gophkeeper add binary --name archive --file archive.zip
@@ -119,8 +123,11 @@ gophkeeper add card --name visa --holder "IVAN IVANOV" --expires 12/29
 gophkeeper list
 gophkeeper get <id> --out archive.zip
 gophkeeper delete <id>
-gophkeeper sync
+gophkeeper -a 127.0.0.1:3200 --cacert server.crt sync
 ```
+
+Команды `add`, `list`, `get` и `delete` работают с локальным хранилищем и сервер
+не трогают, поэтому адрес им не нужен.
 
 Мастер-пароль запрашивается без эха. Для скриптов его можно передать переменной
 `GOPHKEEPER_MASTER_PASSWORD`.
