@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"iter"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -159,33 +160,38 @@ func (s *Storage) GetSecret(ctx context.Context, userID, id string) (model.Secre
 	return rec, nil
 }
 
-// EachSecretSince передаёт в fn все изменения пользователя с ревизией больше since
+// EachSecretSince отдаёт все изменения пользователя с ревизией больше since
 // строго по возрастанию ревизии: клиент сохраняет курсор вместе с каждым изменением,
 // поэтому обрыв связи не должен приводить к пропуску более старой записи.
 //
-// Изменения читаются страницами, и соединение возвращается в пул до вызова fn:
+// Изменения читаются страницами, и соединение возвращается в пул до выдачи записи:
 // иначе клиент, перестающий читать поток, держал бы соединение всё это время и
-// несколько таких клиентов исчерпали бы пул.
-func (s *Storage) EachSecretSince(ctx context.Context, userID string, since int64, fn func(model.SecretRecord) error) error {
-	if _, err := parseUserID(userID); err != nil {
-		return err
-	}
-
-	for {
-		page, err := s.secretsPage(ctx, userID, since)
-		if err != nil {
-			return err
+// несколько таких клиентов исчерпали бы пул. Последовательность прекращается, как
+// только читающий выходит из цикла.
+func (s *Storage) EachSecretSince(ctx context.Context, userID string, since int64) iter.Seq2[model.SecretRecord, error] {
+	return func(yield func(model.SecretRecord, error) bool) {
+		if _, err := parseUserID(userID); err != nil {
+			yield(model.SecretRecord{}, err)
+			return
 		}
 
-		if len(page) == 0 {
-			return nil
-		}
-
-		for _, rec := range page {
-			if err := fn(rec); err != nil {
-				return err
+		for {
+			page, err := s.secretsPage(ctx, userID, since)
+			if err != nil {
+				yield(model.SecretRecord{}, err)
+				return
 			}
-			since = rec.Revision
+
+			if len(page) == 0 {
+				return
+			}
+
+			for _, rec := range page {
+				if !yield(rec, nil) {
+					return
+				}
+				since = rec.Revision
+			}
 		}
 	}
 }

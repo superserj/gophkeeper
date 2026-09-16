@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 
 	"golang.org/x/sync/semaphore"
 
@@ -36,7 +37,7 @@ type Repository interface {
 	CreateUser(ctx context.Context, u storage.User) (string, error)
 	GetUserByLogin(ctx context.Context, login string) (storage.User, error)
 	GetSecret(ctx context.Context, userID, id string) (model.SecretRecord, error)
-	EachSecretSince(ctx context.Context, userID string, since int64, fn func(model.SecretRecord) error) error
+	EachSecretSince(ctx context.Context, userID string, since int64) iter.Seq2[model.SecretRecord, error]
 	SaveSecret(ctx context.Context, userID string, rec model.SecretRecord, baseRevision int64) (int64, error)
 }
 
@@ -236,9 +237,9 @@ func (s *Service) Push(ctx context.Context, userID string, rec model.SecretRecor
 	return s.repo.SaveSecret(ctx, userID, rec, baseRevision)
 }
 
-// Pull передаёт в fn изменения пользователя с ревизией больше since.
-func (s *Service) Pull(ctx context.Context, userID string, since int64, fn func(model.SecretRecord) error) error {
-	return s.repo.EachSecretSince(ctx, userID, since, fn)
+// Pull отдаёт изменения пользователя с ревизией больше since.
+func (s *Service) Pull(ctx context.Context, userID string, since int64) iter.Seq2[model.SecretRecord, error] {
+	return s.repo.EachSecretSince(ctx, userID, since)
 }
 
 // Get возвращает одну запись пользователя.

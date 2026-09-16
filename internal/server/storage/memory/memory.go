@@ -5,7 +5,10 @@
 package memory
 
 import (
+	"cmp"
 	"context"
+	"iter"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -81,30 +84,34 @@ func (s *Storage) GetSecret(_ context.Context, userID, id string) (model.SecretR
 	return rec, nil
 }
 
-// EachSecretSince передаёт изменения пользователя по возрастанию ревизии.
-func (s *Storage) EachSecretSince(_ context.Context, userID string, since int64, fn func(model.SecretRecord) error) error {
-	s.mu.RLock()
-	state, ok := s.byUserID[userID]
-	if !ok {
+// EachSecretSince отдаёт изменения пользователя по возрастанию ревизии.
+func (s *Storage) EachSecretSince(_ context.Context, userID string, since int64) iter.Seq2[model.SecretRecord, error] {
+	return func(yield func(model.SecretRecord, error) bool) {
+		s.mu.RLock()
+		state, ok := s.byUserID[userID]
+		if !ok {
+			s.mu.RUnlock()
+			yield(model.SecretRecord{}, storage.ErrUserNotFound)
+			return
+		}
+
+		changes := make([]model.SecretRecord, 0, len(state.secrets))
+		for _, rec := range state.secrets {
+			if rec.Revision > since {
+				changes = append(changes, rec)
+			}
+		}
 		s.mu.RUnlock()
-		return storage.ErrUserNotFound
-	}
 
-	changes := make([]model.SecretRecord, 0, len(state.secrets))
-	for _, rec := range state.secrets {
-		if rec.Revision > since {
-			changes = append(changes, rec)
+		slices.SortFunc(changes, func(a, b model.SecretRecord) int {
+			return cmp.Compare(a.Revision, b.Revision)
+		})
+		for _, rec := range changes {
+			if !yield(rec, nil) {
+				return
+			}
 		}
 	}
-	s.mu.RUnlock()
-
-	sortByRevision(changes)
-	for _, rec := range changes {
-		if err := fn(rec); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // SaveSecret сохраняет запись поверх известной клиенту ревизии.
@@ -130,12 +137,4 @@ func (s *Storage) SaveSecret(_ context.Context, userID string, rec model.SecretR
 	rec.UpdatedAt = time.Now()
 	state.secrets[rec.ID] = rec
 	return rec.Revision, nil
-}
-
-func sortByRevision(records []model.SecretRecord) {
-	for i := 1; i < len(records); i++ {
-		for j := i; j > 0 && records[j-1].Revision > records[j].Revision; j-- {
-			records[j-1], records[j] = records[j], records[j-1]
-		}
-	}
 }

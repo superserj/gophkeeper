@@ -143,12 +143,11 @@ func TestEachSecretSinceOrdersByRevision(t *testing.T) {
 	}
 
 	var revisions []int64
-	err := store.EachSecretSince(ctx, userID, firstRevision, func(rec model.SecretRecord) error {
+	for rec, err := range store.EachSecretSince(ctx, userID, firstRevision) {
+		if err != nil {
+			t.Fatalf("EachSecretSince: %v", err)
+		}
 		revisions = append(revisions, rec.Revision)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("EachSecretSince: %v", err)
 	}
 	if len(revisions) != 2 {
 		t.Fatalf("получено %d изменений, ожидалось 2", len(revisions))
@@ -180,7 +179,10 @@ func TestEachSecretSinceReturnsEverythingAcrossPages(t *testing.T) {
 	}
 
 	var previous int64
-	err := store.EachSecretSince(ctx, userID, 0, func(rec model.SecretRecord) error {
+	for rec, err := range store.EachSecretSince(ctx, userID, 0) {
+		if err != nil {
+			t.Fatalf("EachSecretSince: %v", err)
+		}
 		seen, known := ids[rec.ID]
 		if !known {
 			t.Fatalf("пришла чужая запись %s", rec.ID)
@@ -193,10 +195,6 @@ func TestEachSecretSinceReturnsEverythingAcrossPages(t *testing.T) {
 		}
 		ids[rec.ID] = true
 		previous = rec.Revision
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("EachSecretSince: %v", err)
 	}
 
 	for id, seen := range ids {
@@ -206,19 +204,27 @@ func TestEachSecretSinceReturnsEverythingAcrossPages(t *testing.T) {
 	}
 }
 
-func TestEachSecretSinceStopsOnError(t *testing.T) {
+func TestEachSecretSinceStopsOnBreak(t *testing.T) {
 	ctx := t.Context()
 	store := newStorage(t)
 	userID := newUser(t, store, uniqueLogin(t))
 
-	if _, err := store.SaveSecret(ctx, userID, model.SecretRecord{ID: newUUID(t), Payload: []byte("data")}, 0); err != nil {
-		t.Fatalf("SaveSecret: %v", err)
+	for i := 0; i < 3; i++ {
+		if _, err := store.SaveSecret(ctx, userID, model.SecretRecord{ID: newUUID(t), Payload: []byte("data")}, 0); err != nil {
+			t.Fatalf("SaveSecret: %v", err)
+		}
 	}
 
-	sentinel := errors.New("stop")
-	err := store.EachSecretSince(ctx, userID, 0, func(model.SecretRecord) error { return sentinel })
-	if !errors.Is(err, sentinel) {
-		t.Fatalf("получено %v, ожидалась ошибка обработчика", err)
+	var seen int
+	for _, err := range store.EachSecretSince(ctx, userID, 0) {
+		if err != nil {
+			t.Fatalf("EachSecretSince: %v", err)
+		}
+		seen++
+		break
+	}
+	if seen != 1 {
+		t.Fatalf("после выхода из цикла получено %d изменений", seen)
 	}
 }
 

@@ -71,17 +71,21 @@ func (s *VaultService) Pull(req *pb.PullRequest, stream pb.VaultService_PullServ
 		return status.Error(codes.Unauthenticated, "missing token")
 	}
 
-	err := s.svc.Pull(stream.Context(), userID, req.GetSince(), func(rec model.SecretRecord) error {
-		return stream.Send(&pb.SecretChange{
+	for rec, err := range s.svc.Pull(stream.Context(), userID, req.GetSince()) {
+		if err != nil {
+			return s.fail("pull", err)
+		}
+
+		err = stream.Send(&pb.SecretChange{
 			Id:              rec.ID,
 			Payload:         rec.Payload,
 			Deleted:         rec.Deleted,
 			Revision:        rec.Revision,
 			UpdatedAtUnixMs: rec.UpdatedAt.UnixMilli(),
 		})
-	})
-	if err != nil {
-		return s.fail("pull", err)
+		if err != nil {
+			return s.fail("pull", err)
+		}
 	}
 	return nil
 }

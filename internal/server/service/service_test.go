@@ -264,12 +264,11 @@ func TestPullReturnsChangesInOrder(t *testing.T) {
 	}
 
 	var revisions []int64
-	err := svc.Pull(ctx, userID, 1, func(rec model.SecretRecord) error {
+	for rec, err := range svc.Pull(ctx, userID, 1) {
+		if err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
 		revisions = append(revisions, rec.Revision)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Pull: %v", err)
 	}
 	if len(revisions) != 2 {
 		t.Fatalf("получено %d изменений, ожидалось 2", len(revisions))
@@ -279,18 +278,27 @@ func TestPullReturnsChangesInOrder(t *testing.T) {
 	}
 }
 
-func TestPullStopsOnError(t *testing.T) {
+func TestPullStopsOnBreak(t *testing.T) {
 	ctx := t.Context()
 	svc := newService()
 	userID := register(t, svc)
 
-	if _, err := svc.Push(ctx, userID, model.SecretRecord{ID: "a", Payload: []byte("one")}, 0); err != nil {
-		t.Fatalf("Push: %v", err)
+	for _, id := range []string{"a", "b"} {
+		if _, err := svc.Push(ctx, userID, model.SecretRecord{ID: id, Payload: []byte(id)}, 0); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
 	}
 
-	sentinel := errors.New("stop")
-	if err := svc.Pull(ctx, userID, 0, func(model.SecretRecord) error { return sentinel }); !errors.Is(err, sentinel) {
-		t.Fatalf("получено %v, ожидалась ошибка обработчика", err)
+	var seen int
+	for _, err := range svc.Pull(ctx, userID, 0) {
+		if err != nil {
+			t.Fatalf("Pull: %v", err)
+		}
+		seen++
+		break
+	}
+	if seen != 1 {
+		t.Fatalf("после выхода из цикла получено %d изменений", seen)
 	}
 }
 
