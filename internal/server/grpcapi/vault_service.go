@@ -120,6 +120,7 @@ func (s *VaultService) Upload(stream pb.VaultService_UploadServer) error {
 			break
 		}
 		if err != nil {
+			s.logger.Error("upload: receive chunk", zap.Error(err))
 			return status.Error(codes.Internal, "receive chunk")
 		}
 		if first {
@@ -159,6 +160,7 @@ func (s *VaultService) Download(req *pb.DownloadRequest, stream pb.VaultService_
 			end = len(rec.Payload)
 		}
 		if err := stream.Send(&pb.DownloadChunk{Data: rec.Payload[offset:end], Revision: rec.Revision}); err != nil {
+			s.logger.Error("download: send chunk", zap.Error(err))
 			return status.Error(codes.Internal, "send chunk")
 		}
 	}
